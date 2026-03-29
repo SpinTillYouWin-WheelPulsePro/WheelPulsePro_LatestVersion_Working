@@ -1,0 +1,34 @@
+name: Sync to Hugging Face Space
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install huggingface_hub
+          python - <<'PYEOF'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi()
+          api.upload_folder(
+              folder_path=".",
+              repo_id="Spintillyouwinwheelpulsepro/WheelPulsePro-Super-Max-Slider-2026",
+              repo_type="space",
+              token=os.environ["HF_TOKEN"],
+              ignore_patterns=["*.git*", ".github*", "__pycache__*"]
+          )
+          print("Upload complete!")
+          PYEOF
