@@ -19,7 +19,9 @@ _EXTRA_CSS = """
     max-width: 100% !important;
     font-size: 16px !important;
     padding: 12px !important;
-    min-height: 50px !important;
+    min-height: 120px !important;
+    max-height: 300px !important;
+    overflow-y: auto !important;
     letter-spacing: 1px;
     font-family: 'Courier New', monospace;
 }

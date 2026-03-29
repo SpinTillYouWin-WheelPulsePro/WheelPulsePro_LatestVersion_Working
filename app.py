@@ -3265,6 +3265,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         label="Enter Spins",
         value="",
         interactive=True,
+        lines=3,
         elem_id="selected-spins"
     )
     

@@ -3522,7 +3522,7 @@ def _aco_section(icon: str, title: str, body_html: str, copy_text: str) -> str:
     js_text = _aco_js(copy_text)
     section_key = re.sub(r'[^a-z0-9]+', '_',
                          re.sub(r'&[a-z]+;', '_', title.lower())).strip('_')
-    return f"""<details data-section-key="{section_key}" style="margin-bottom:10px;">
+    return f"""<details open data-section-key="{section_key}" style="margin-bottom:10px;">
   <summary style="cursor:pointer;padding:10px 14px;
     border-radius:8px;border:1px solid #d1d5db;
     background:#f8fafc;color:#1f2937;
