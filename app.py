@@ -29,6 +29,8 @@ import sys as _sys
 import importlib.util as _importlib_util
 from wheelpulsepro.persistence import autosave, autorestore
 
+# ✅ Sync Test: GitHub → Hugging Face pipeline verified (2026-03-29)
+
 
 def _lazy_module(name: str):
     """Return a lazily-loaded module; its body runs only on first attribute access.
