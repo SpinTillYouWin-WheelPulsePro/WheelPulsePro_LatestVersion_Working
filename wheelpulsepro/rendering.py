@@ -7,10 +7,56 @@ without Gradio.
 
 import heapq
 import json
+import logging
 import math
 import re
+import traceback
 
+import pandas as pd
+
+from roulette_data import (
+    COLUMNS,
+    CORNERS,
+    DOZENS,
+    EVEN_MONEY,
+    SIX_LINES,
+    SPLITS,
+    STREETS,
+)
 from wheelpulsepro.state import CUSTOM_PROGRESSIONS, get_custom_progression_for_bet
+
+logger = logging.getLogger("wheelPulsePro.rendering")
+
+# ---------------------------------------------------------------------------
+# Module-level state injected via init_app() / set_callbacks()
+# These are set once at app startup so the zero-arg rendering helpers work.
+# ---------------------------------------------------------------------------
+_state = None
+_current_neighbors = None
+_colors: dict = {}
+_prev_active_cards: dict = {}      # {card_key: headline_str} from latest render
+_calculate_trending_fn = None      # callable: calculate_trending_sections()
+_render_cards_fn = None            # callable: render_strategy_cards_area_html(*args)
+_strategies: dict = {}             # STRATEGIES dict injected from app.py
+
+
+def init_app(state_obj, current_neighbors_dict, colors_dict) -> None:
+    """Inject shared state, neighbour lookup, and colour map from app.py."""
+    global _state, _current_neighbors, _colors
+    _state = state_obj
+    _current_neighbors = current_neighbors_dict
+    _colors = colors_dict
+
+
+def set_callbacks(calculate_trending_fn=None, render_cards_fn=None, strategies_dict=None) -> None:
+    """Register callbacks that depend on app-level functions defined later."""
+    global _calculate_trending_fn, _render_cards_fn, _strategies
+    if calculate_trending_fn is not None:
+        _calculate_trending_fn = calculate_trending_fn
+    if render_cards_fn is not None:
+        _render_cards_fn = render_cards_fn
+    if strategies_dict is not None:
+        _strategies = strategies_dict
 
 
 def format_spins_as_html(spins, num_to_show, show_trends, colors, DOZENS, COLUMNS, EVEN_MONEY):
@@ -4890,3 +4936,984 @@ def _ai_coach_outer_html(inner_html: str, n_spins: int, live: bool) -> str:
 </div>"""
 
 
+
+
+# ===========================================================================
+# Functions migrated from app.py (rendering logic)
+# ===========================================================================
+def _extract_cards_fingerprint(html: str) -> dict:
+    """Extract a ``{card_key: headline_str}`` dict from strategy-cards HTML.
+
+    The card_key is the hud-title text (stable card ID).  The headline_str
+    equals the card title for regular strategy cards and the brain
+    recommendation target for the ``__brain__`` entry.
+
+    Fails gracefully — never raises an exception.
+    """
+    result: dict = {}
+    try:
+        for title in re.findall(r'class="hud-title"[^>]*>\s*([^<]+?)\s*<', html):
+            title = title.strip()
+            if title and 'SCANNING' not in title.upper():
+                # Value equals key: for strategy cards the title is both the
+                # stable ID and the headline (the card's content doesn't change
+                # headline independently the way the brain recommendation does).
+                result[title] = title
+        brain = re.search(r'I would target\s*<b[^>]*>\s*([^<]+?)\s*<', html)
+        if brain:
+            result['__brain__'] = brain.group(1).strip()
+    except Exception:
+        pass
+    return result
+
+
+def render_alerts_bar_html() -> str:
+    """Render the sticky Alerts Bar showing currently-active strategy cards only.
+
+    Reflects the *current* set of visible/active strategy cards. When a card
+    disappears it is automatically removed from the bar on the next render —
+    no manual clearing required.
+
+    The sticky positioning is handled by the ``_EXTRA_CSS`` passed to
+    ``gr.Blocks``; this function returns only the bar's inner HTML content.
+    Returns a safe HTML string; never raises an exception.
+    """
+    try:
+        card_names = [k for k in _prev_active_cards if k != '__brain__']
+
+        if not card_names:
+            return (
+                "<div id='wp-alerts-bar' style='"
+                "background:rgba(15,23,42,0.85);padding:7px 16px;"
+                "display:flex;align-items:center;gap:12px;"
+                "font-family:system-ui,sans-serif;font-size:13px;"
+                "color:rgba(255,255,255,0.4);'>"
+                "🔔 No active strategy alerts"
+                "</div>"
+            )
+
+        parts = []
+        for name in card_names:
+            parts.append(
+                f"<span style='display:inline-flex;align-items:center;gap:5px;"
+                f"background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);"
+                f"border-radius:6px;padding:3px 10px;font-size:12px;color:#fca5a5;"
+                f"white-space:nowrap;'>"
+                f"🚨&nbsp;<b style='color:#fca5a5;'>{name}</b>"
+                f"</span>"
+            )
+
+        count_badge = (
+            f"<span style='background:#ef4444;color:#fff;border-radius:12px;"
+            f"padding:2px 9px;font-size:11px;font-weight:700;white-space:nowrap;"
+            f"flex-shrink:0;'>"
+            f"Active: {len(card_names)}"
+            f"</span>"
+        )
+
+        _corner_style = (
+            "position:absolute;width:7px;height:7px;"
+            "border-radius:1px;background:#ef4444;"
+            "animation:wpCornerPulse 1.4s ease-in-out infinite;"
+        )
+        corners = (
+            f"<span style='{_corner_style}top:3px;left:3px;'></span>"
+            f"<span style='{_corner_style}top:3px;right:3px;animation-delay:0.35s;'></span>"
+            f"<span style='{_corner_style}bottom:3px;left:3px;animation-delay:0.7s;'></span>"
+            f"<span style='{_corner_style}bottom:3px;right:3px;animation-delay:1.05s;'></span>"
+        )
+
+        return (
+            "<style>"
+            "@keyframes wpBarGlow{"
+            "0%,100%{box-shadow:0 0 12px rgba(239,68,68,0.15),0 2px 12px rgba(239,68,68,0.1);}"
+            "50%{box-shadow:0 0 24px rgba(239,68,68,0.4),0 2px 20px rgba(239,68,68,0.25);}}"
+            "@keyframes wpCornerPulse{"
+            "0%,100%{opacity:1;transform:scale(1);}"
+            "50%{opacity:0.35;transform:scale(1.6);}}"
+            "</style>"
+            f"<div id='wp-alerts-bar' style='"
+            f"position:relative;"
+            f"background:linear-gradient(90deg,#1a0505,#0f172a);"
+            f"border-left:3px solid #ef4444;"
+            f"padding:7px 16px;"
+            f"display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
+            f"font-family:system-ui,sans-serif;"
+            f"animation:wpBarGlow 2.5s ease-in-out infinite;"
+            f"transition:background 0.5s ease,border-color 0.5s ease,box-shadow 0.5s ease;'>"
+            f"{corners}"
+            f"<span style='font-size:15px;flex-shrink:0;'>🔔</span>"
+            f"{''.join(parts)}"
+            f"{count_badge}"
+            f"</div>"
+        )
+    except Exception as e:
+        logger.error(f"render_alerts_bar_html error: {e}")
+        return ""
+
+
+def render_master_information_summary_html(precomputed_recommendation=None):
+    """Render a compact one-liner summary for the Master Information section.
+
+    Always visible above the collapsed accordion, showing the current best
+    bet label, master score, and analysis window so the user can glance at
+    the recommendation without expanding the section.
+    """
+    try:
+        ranked = (
+            precomputed_recommendation
+            if precomputed_recommendation is not None
+            else compute_last_money_recommendation(_state)
+        )
+        if not ranked:
+            return ""
+        best = ranked[0]
+        last_spins = getattr(_state, 'last_spins', [])
+        n = len(last_spins)
+        if n < 3:
+            return ""
+        W = min(_MI_WINDOW, n)
+        score_pct = int(best['score'] * 100)
+        return (
+            f'<div style="background:linear-gradient(90deg,#1e1b4b,#0f172a);'
+            f'border:1px solid #7c3aed;border-radius:8px;padding:8px 14px;'
+            f'margin-bottom:6px;display:flex;align-items:center;gap:12px;'
+            f'font-family:\'Segoe UI\',system-ui,sans-serif;flex-wrap:wrap;">'
+            f'<span style="color:#a78bfa;font-size:11px;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:1px;white-space:nowrap;">🎯 Last Bet:</span>'
+            f'<span style="color:#fff;font-size:14px;font-weight:900;white-space:nowrap;">'
+            f'{best["label"]}</span>'
+            f'<span style="color:#94a3b8;font-size:11px;white-space:nowrap;">'
+            f'Score&nbsp;<b style="color:#c4b5fd;">{score_pct}</b>&nbsp;·&nbsp;'
+            f'W=<b style="color:#c4b5fd;">{W}</b></span>'
+            f'</div>'
+        )
+    except Exception:
+        return ""
+
+
+def render_cards_and_alerts(*args):
+    """Render strategy cards and update the Alerts Bar.
+
+    Returns ``(cards_html, alerts_bar_html)`` for use as outputs of Gradio
+    callbacks that update ``strategy_cards_area`` and ``alerts_bar_output``.
+
+    The Alerts Bar reflects the *current* set of visible/active cards; cards
+    that disappear are automatically removed on the next render — no history
+    or manual clearing is needed.
+
+    All steps are wrapped in try/except so alert failures can never crash the
+    core card-rendering logic.
+    """
+    global _prev_active_cards
+    try:
+        cards_html = _render_cards_fn(*args)
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: render error: {e}")
+        cards_html = ""
+
+    try:
+        _prev_active_cards = _extract_cards_fingerprint(cards_html)
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: fingerprint error: {e}")
+
+    try:
+        alerts_bar = render_alerts_bar_html()
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: alert render error: {e}")
+        alerts_bar = ""
+
+    return cards_html, alerts_bar
+
+
+def render_ai_coach_html(precomputed_recommendation=None, pinned_numbers_raw=None):
+    """Return the live Pulse AI Coach HTML, reading from module-level _state."""
+    try:
+        return render_ai_coach_prompt_html(
+            _state,
+            precomputed_recommendation=precomputed_recommendation,
+            pinned_numbers_raw=pinned_numbers_raw,
+        )
+    except Exception as e:
+        logger.error(f"render_ai_coach_html error: {e}")
+        return ""
+
+
+def render_master_info_both(pinned_numbers_raw=None):
+    """Return ``(summary_html, detail_html, ai_coach_html)`` for all three components.
+
+    Used in callbacks so a single ``.then()`` step updates the compact summary
+    strip, the full detail panel, and the Pulse AI Coach together.
+
+    ``compute_last_money_recommendation`` is called **once** here and the result
+    is forwarded to all three renderers to avoid redundant expensive computation.
+    """
+    try:
+        ranked = compute_last_money_recommendation(_state)
+        return (
+            render_master_information_summary_html(ranked),
+            render_master_information_html(_state, precomputed_recommendation=ranked),
+            render_ai_coach_html(ranked, pinned_numbers_raw=pinned_numbers_raw),
+        )
+    except Exception as e:
+        logger.error(f"render_master_info_both error: {e}")
+        return "", "", ""
+
+
+def highlight_even_money(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight even money bets for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, None, {}
+    trending, second, third = None, None, None
+    number_highlights = {}
+    if strategy_name in ["Best Even Money Bets", "Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Columns + Best Even Money Bets + Top Pick 18 Numbers"]:
+        even_money_hits = [item for item in sorted_sections["even_money"] if item[1] > 0]
+        if even_money_hits:
+            trending = even_money_hits[0][0]
+            second = even_money_hits[1][0] if len(even_money_hits) > 1 else None
+            third = even_money_hits[2][0] if len(even_money_hits) > 2 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["even_money"][0][0] if sorted_sections["even_money"] else None
+        second = sorted_sections["even_money"][1][0] if len(sorted_sections["even_money"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_even_money = sorted(_state.even_money_scores.items(), key=lambda x: x[1])
+        trending = sorted_even_money[0][0] if sorted_even_money else None
+        second = sorted_even_money[1][0] if len(sorted_even_money) > 1 else None
+    elif strategy_name in ["3-8-6 Rising Martingale", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, highlight only the top even money bet
+        trending = sorted_sections["even_money"][0][0] if sorted_sections["even_money"] else None
+    elif strategy_name == "Best Even Money Bet (Till the tie breaks, No Highlighting)":
+        sorted_em = sorted(_state.even_money_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_em and sorted_em[0][1] > 0:
+            # Check if 1st place is strictly greater than 2nd place
+            if len(sorted_em) > 1 and sorted_em[0][1] > sorted_em[1][1]:
+                trending = sorted_em[0][0]
+            # If tied (sorted_em[0][1] == sorted_em[1][1]), trending remains None (No Highlight)
+    return trending, second, third, number_highlights
+
+
+def highlight_dozens(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight dozens for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, {}
+    trending, second = None, None
+    number_highlights = {}
+    if strategy_name in ["Best Dozens", "Best Dozens + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Streets"]:
+        dozens_hits = [item for item in sorted_sections["dozens"] if item[1] > 0]
+        if dozens_hits:
+            trending = dozens_hits[0][0]
+            second = dozens_hits[1][0] if len(dozens_hits) > 1 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_dozens = sorted(_state.dozen_scores.items(), key=lambda x: x[1])
+        trending = sorted_dozens[0][0] if sorted_dozens else None
+        second = sorted_dozens[1][0] if len(sorted_dozens) > 1 else None
+    elif strategy_name in ["Fibonacci Strategy", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, always highlight the top two dozens
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 else None
+    elif strategy_name == "1 Dozen +1 Column Strategy":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] and sorted_sections["dozens"][0][1] > 0 else None
+    elif strategy_name == "Best Single Dozen (Till the tie breaks, No Highlighting)":
+        sorted_d = sorted(_state.dozen_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_d and sorted_d[0][1] > 0:
+            if len(sorted_d) > 1 and sorted_d[0][1] > sorted_d[1][1]:
+                trending = sorted_d[0][0]
+    elif strategy_name == "Romanowksy Missing Dozen":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] and sorted_sections["dozens"][0][1] > 0 else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 and sorted_sections["dozens"][1][1] > 0 else None
+        weakest_dozen = min(_state.dozen_scores.items(), key=lambda x: x[1], default=("1st Dozen", 0))[0]
+        straight_up_df = pd.DataFrame(list(_state.scores.items()), columns=["Number", "Score"])
+        straight_up_df = straight_up_df[straight_up_df["Score"] > 0].sort_values(by="Score", ascending=False)
+        weak_numbers = [row["Number"] for _, row in straight_up_df.iterrows() if row["Number"] in DOZENS[weakest_dozen]][:8]
+        for num in weak_numbers:
+            number_highlights[str(num)] = top_color
+    return trending, second, number_highlights
+
+
+def highlight_columns(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight columns for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, {}
+    trending, second = None, None
+    number_highlights = {}
+    if strategy_name in ["Best Columns", "Best Columns + Top Pick 18 Numbers", 
+                         "Best Columns + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Columns + Best Streets"]:
+        columns_hits = [item for item in sorted_sections["columns"] if item[1] > 0]
+        if columns_hits:
+            trending = columns_hits[0][0]
+            second = columns_hits[1][0] if len(columns_hits) > 1 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] else None
+        second = sorted_sections["columns"][1][0] if len(sorted_sections["columns"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_columns = sorted(_state.column_scores.items(), key=lambda x: x[1])
+        trending = sorted_columns[0][0] if sorted_columns else None
+        second = sorted_columns[1][0] if len(sorted_columns) > 1 else None
+    elif strategy_name in ["Fibonacci Strategy", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, always highlight the top two columns
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] else None
+        second = sorted_sections["columns"][1][0] if len(sorted_sections["columns"]) > 1 else None
+    elif strategy_name == "Best Column (Till the tie breaks, No Highlighting)":
+        sorted_c = sorted(_state.column_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_c and sorted_c[0][1] > 0:
+            if len(sorted_c) > 1 and sorted_c[0][1] > sorted_c[1][1]:
+                trending = sorted_c[0][0]
+    elif strategy_name == "1 Dozen +1 Column Strategy":
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] and sorted_sections["columns"][0][1] > 0 else None
+    return trending, second, number_highlights
+
+
+def highlight_numbers(strategy_name, sorted_sections, top_color, middle_color, lower_color, strong_numbers_count=18):
+    """Highlight straight-up numbers for relevant strategies, supporting dynamic counts from 1-34."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    straight_up_df = pd.DataFrame(list(_state.scores.items()), columns=["Number", "Score"])
+    straight_up_df = straight_up_df[straight_up_df["Score"] > 0].sort_values(by="Score", ascending=False)
+    
+    # List of strategies that use the 'Top Pick' number highlighting
+    top_pick_strategies = [
+        "Top Pick 18 Numbers without Neighbours", 
+        "Best Even Money Bets + Top Pick 18 Numbers", 
+        "Best Dozens + Top Pick 18 Numbers", 
+        "Best Columns + Top Pick 18 Numbers", 
+        "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+        "Best Columns + Best Even Money Bets + Top Pick 18 Numbers"
+    ]
+
+    if strategy_name in top_pick_strategies:
+        # Get the count from the slider (passed via strong_numbers_count)
+        # We cap it at 34 as requested
+        count = max(1, min(int(strong_numbers_count), 34))
+        
+        if not straight_up_df.empty:
+            # Take the top N numbers based on score
+            top_n_numbers = straight_up_df["Number"].head(count).tolist()
+            
+            # Divide the count into 3 tiers for coloring
+            tier_size = count // 3
+            remainder = count % 3
+            
+            # First tier gets the remainder
+            size1 = tier_size + remainder
+            size2 = tier_size
+            
+            for i, num in enumerate(top_n_numbers):
+                if i < size1: color = top_color
+                elif i < (size1 + size2): color = middle_color
+                else: color = lower_color
+                number_highlights[str(num)] = color
+
+            # --- GHOST PREDICTOR LOGIC ---
+            # Identify the NEXT 3 strongest numbers that didn't make the primary cut
+            ghost_picks = straight_up_df["Number"].iloc[count:count+3].tolist()
+            for ghost_num in ghost_picks:
+                # Use semi-transparent white to trigger the dashed border CSS
+                number_highlights[str(ghost_num)] = "rgba(255, 255, 255, 0.2)"
+                
+    elif strategy_name == "Top Numbers with Neighbours (Tiered)":
+        num_to_take = min(8, len(straight_up_df))
+        top_numbers = set(straight_up_df["Number"].head(num_to_take).tolist())
+        number_groups = []
+        for num in top_numbers:
+            left, right = _current_neighbors.get(num, (None, None))
+            group = [num]
+            if left is not None:
+                group.append(left)
+            if right is not None:
+                group.append(right)
+            number_groups.append((_state.scores[num], group))
+        number_groups.sort(key=lambda x: x[0], reverse=True)
+        ordered_numbers = []
+        for _, group in number_groups:
+            ordered_numbers.extend(group)
+        ordered_numbers = ordered_numbers[:24]
+        for i, num in enumerate(ordered_numbers):
+            color = top_color if i < 8 else (middle_color if i < 16 else lower_color)
+            number_highlights[str(num)] = color
+    return number_highlights
+
+
+def highlight_other_bets(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight streets, corners, splits, and double streets for relevant strategies."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    
+    if strategy_name == "Hot Bet Strategy":
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (split_name, _) in enumerate(sorted_sections["splits"][:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_streets = sorted(_state.street_scores.items(), key=lambda x: x[1])
+        sorted_corners = sorted(_state.corner_scores.items(), key=lambda x: x[1])
+        sorted_splits = sorted(_state.split_scores.items(), key=lambda x: x[1])
+        for i, (street_name, _) in enumerate(sorted_streets[:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (corner_name, _) in enumerate(sorted_corners[:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (split_name, _) in enumerate(sorted_splits[:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Streets":
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name in ["Best Dozens + Best Streets", "Best Columns + Best Streets"]:
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Double Streets":
+        for i, (six_line_name, _) in enumerate(sorted_sections["six_lines"][:9]):
+            numbers = SIX_LINES[six_line_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Corners":
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Sniper: Best Street + Corner":
+        # Highlight top 3 streets (yellow, cyan, green) + top 3 corners
+        # Streets get priority on overlapping numbers
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:3]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i == 0 else (middle_color if i == 1 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        # Streets painted on top so they take visual priority
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:3]):
+            numbers = STREETS[street_name]
+            color = top_color if i == 0 else (middle_color if i == 1 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Splits":
+        for i, (split_name, _) in enumerate(sorted_sections["splits"][:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Non-Overlapping Double Street Strategy":
+        non_overlapping_sets = [
+            ["1ST D.STREET – 1, 4", "3RD D.STREET – 7, 10", "5TH D.STREET – 13, 16", "7TH D.STREET – 19, 22", "9TH D.STREET – 25, 28"],
+            ["2ND D.STREET – 4, 7", "4TH D.STREET – 10, 13", "6TH D.STREET – 16, 19", "8TH D.STREET – 22, 25", "10TH D.STREET – 28, 31"]
+        ]
+        set_scores = []
+        for idx, non_overlapping_set in enumerate(non_overlapping_sets):
+            total_score = sum(_state.six_line_scores.get(name, 0) for name in non_overlapping_set)
+            set_scores.append((idx, total_score, non_overlapping_set))
+        best_set = max(set_scores, key=lambda x: x[1], default=(0, 0, non_overlapping_sets[0]))
+        sorted_best_set = sorted(best_set[2], key=lambda name: _state.six_line_scores.get(name, 0), reverse=True)[:9]
+        for i, double_street_name in enumerate(sorted_best_set):
+            numbers = SIX_LINES[double_street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Non-Overlapping Corner Strategy":
+        sorted_corners = sorted(_state.corner_scores.items(), key=lambda x: x[1], reverse=True)
+        selected_corners = []
+        selected_numbers = set()
+        for corner_name, _ in sorted_corners:
+            if len(selected_corners) >= 9:
+                break
+            corner_numbers = set(CORNERS[corner_name])
+            if not corner_numbers & selected_numbers:
+                selected_corners.append(corner_name)
+                selected_numbers.update(corner_numbers)
+        for i, corner_name in enumerate(selected_corners):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "3-8-6 Rising Martingale":
+        top_streets = sorted_sections["streets"][:8]
+        for i, (street_name, _) in enumerate(top_streets):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Fibonacci To Fortune":
+        # Highlight the best double street in the weakest dozen, excluding numbers from the top two dozens
+        sorted_dozens = sorted(_state.dozen_scores.items(), key=lambda x: x[1], reverse=True)
+        weakest_dozen = min(_state.dozen_scores.items(), key=lambda x: x[1], default=("1st Dozen", 0))[0]
+        top_two_dozens = [item[0] for item in sorted_dozens[:2]]
+        top_two_dozen_numbers = set()
+        for dozen_name in top_two_dozens:
+            top_two_dozen_numbers.update(DOZENS[dozen_name])
+        double_streets_in_weakest = [
+            (name, _state.six_line_scores.get(name, 0))
+            for name, numbers in SIX_LINES.items()
+            if set(numbers).issubset(DOZENS[weakest_dozen]) and not set(numbers).intersection(top_two_dozen_numbers)
+        ]
+        if double_streets_in_weakest:
+            top_double_street = max(double_streets_in_weakest, key=lambda x: x[1])[0]
+            for num in SIX_LINES[top_double_street]:
+                number_highlights[str(num)] = top_color
+    return number_highlights
+
+
+def highlight_neighbors(strategy_name, sorted_sections, neighbours_count, strong_numbers_count, top_color, middle_color):
+    """Highlight neighbors for the Neighbours of Strong Number strategy."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    if strategy_name == "Neighbours of Strong Number":
+        sorted_numbers = sorted(_state.scores.items(), key=lambda x: (-x[1], x[0]))
+        numbers_hits = [item for item in sorted_numbers if item[1] > 0]
+        if numbers_hits:
+            strong_numbers_count = min(strong_numbers_count, len(numbers_hits))
+            top_numbers = set(item[0] for item in numbers_hits[:strong_numbers_count])
+            neighbors_set = set()
+            for strong_number in top_numbers:
+                current_number = strong_number
+                for _ in range(neighbours_count):
+                    left, _ = _current_neighbors.get(current_number, (None, None))
+                    if left is not None:
+                        neighbors_set.add(left)
+                        current_number = left
+                    else:
+                        break
+                current_number = strong_number
+                for _ in range(neighbours_count):
+                    _, right = _current_neighbors.get(current_number, (None, None))
+                    if right is not None:
+                        neighbors_set.add(right)
+                        current_number = right
+                    else:
+                        break
+            neighbors_set = neighbors_set - top_numbers
+            for num in top_numbers:
+                number_highlights[str(num)] = top_color
+            for num in neighbors_set:
+                number_highlights[str(num)] = middle_color
+    return number_highlights
+
+
+def apply_strategy_highlights(strategy_name, neighbours_count, strong_numbers_count, sorted_sections, top_color=None, middle_color=None, lower_color=None, suggestions=None):
+    """Apply highlights based on the selected strategy with custom colors, passing suggestions for outside bets."""
+    if sorted_sections is None:
+        return None, None, None, None, None, None, None, {}, "white", "white", "white", None
+
+    # Set default colors unless overridden
+    if strategy_name == "Cold Bet Strategy":
+        top_color = "#D3D3D3"  # Light Gray (Cold Top)
+        middle_color = "#DDA0DD"  # Plum (Cold Middle)
+        lower_color = "#E0FFFF"  # Light Cyan (Cold Lower)
+    else:
+        top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"  # Yellow
+        middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"  # Cyan
+        lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"  # Green
+
+    # Initialize highlight variables
+    trending_even_money, second_even_money, third_even_money = None, None, None
+    trending_dozen, second_dozen = None, None
+    trending_column, second_column = None, None
+    number_highlights = {}
+
+    # Apply highlights based on strategy
+    if strategy_name and strategy_name in _strategies:
+        strategy_info = _strategies[strategy_name]
+        if strategy_name == "Neighbours of Strong Number":
+            result = strategy_info["function"](neighbours_count, strong_numbers_count)
+            # Handle the tuple return value
+            if isinstance(result, tuple) and len(result) == 2:
+                recommendations, strategy_suggestions = result
+                suggestions = suggestions if suggestions is not None else strategy_suggestions
+            else:
+                # Fallback in case the function doesn't return the expected tuple
+                recommendations = result
+                suggestions = None
+        else:
+            # Other strategies return a single string
+            recommendations = strategy_info["function"]()
+            suggestions = None
+        
+        # Delegate to helper functions
+        em_trending, em_second, em_third, em_highlights = highlight_even_money(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        dz_trending, dz_second, dz_highlights = highlight_dozens(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        col_trending, col_second, col_highlights = highlight_columns(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        num_highlights = highlight_numbers(strategy_name, sorted_sections, top_color, middle_color, lower_color, strong_numbers_count)
+        neighbor_highlights = highlight_neighbors(strategy_name, sorted_sections, neighbours_count, strong_numbers_count, top_color, middle_color)
+        other_highlights = highlight_other_bets(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+
+        # Combine highlights
+        trending_even_money = em_trending
+        second_even_money = em_second
+        third_even_money = em_third
+        trending_dozen = dz_trending
+        second_dozen = dz_second
+        trending_column = col_trending
+        second_column = col_second
+        number_highlights.update(em_highlights)
+        number_highlights.update(dz_highlights)
+        number_highlights.update(col_highlights)
+        number_highlights.update(num_highlights)
+        number_highlights.update(neighbor_highlights)
+        number_highlights.update(other_highlights)
+
+    # Dozen Tracker Logic (When No Strategy is Selected)
+    if strategy_name == "None":
+        recent_spins = _state.last_spins[-neighbours_count:] if len(_state.last_spins) >= neighbours_count else _state.last_spins
+        dozen_counts = {"1st Dozen": 0, "2nd Dozen": 0, "3rd Dozen": 0}
+        for spin in recent_spins:
+            spin_value = int(spin)
+            if spin_value != 0:
+                for name, numbers in DOZENS.items():
+                    if spin_value in numbers:
+                        dozen_counts[name] += 1
+                        break
+        sorted_dozens = sorted(dozen_counts.items(), key=lambda x: x[1], reverse=True)
+        if sorted_dozens[0][1] > 0:
+            trending_dozen = sorted_dozens[0][0]
+        if sorted_dozens[1][1] > 0:
+            second_dozen = sorted_dozens[1][0]
+
+    return trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions
+
+
+def render_dynamic_table_html(trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions=None, hot_numbers=None, scores=None):
+    """Generate HTML for the dynamic roulette table with improved visual clarity."""
+    # Safety check for empty data
+    if all(v is None for v in [trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column]) and not number_highlights and not suggestions:
+        return "<p>Please analyze some spins first to see highlights on the dynamic table.</p>"
+
+    # Define casino winners
+    casino_winners = {"hot_numbers": set(), "cold_numbers": set(), "even_money": set(), "dozens": set(), "columns": set()}
+    if _state.use_casino_winners:
+        casino_winners["hot_numbers"] = set(_state.casino_data["hot_numbers"].keys())
+        casino_winners["cold_numbers"] = set(_state.casino_data["cold_numbers"].keys())
+        if any(_state.casino_data["even_odd"].values()):
+            casino_winners["even_money"].add(max(_state.casino_data["even_odd"], key=_state.casino_data["even_odd"].get))
+        if any(_state.casino_data["red_black"].values()):
+            casino_winners["even_money"].add(max(_state.casino_data["red_black"], key=_state.casino_data["red_black"].get))
+        if any(_state.casino_data["low_high"].values()):
+            casino_winners["even_money"].add(max(_state.casino_data["low_high"], key=_state.casino_data["low_high"].get))
+        if any(_state.casino_data["dozens"].values()):
+            casino_winners["dozens"] = {max(_state.casino_data["dozens"], key=_state.casino_data["dozens"].get)}
+        if any(_state.casino_data["columns"].values()):
+            casino_winners["columns"] = {max(_state.casino_data["columns"], key=_state.casino_data["columns"].get)}
+
+    # Initialize suggestion highlights
+    suggestion_highlights = {}
+    if suggestions:
+        best_even_money = None
+        best_bet = None
+        play_two_first = None
+        play_two_second = None
+
+        for key, value in suggestions.items():
+            if key == "best_even_money" and "(Tied with" not in value:
+                best_even_money = value.split(":")[0].strip()
+            elif key == "best_bet" and "(Tied with" not in value:
+                best_bet = value.split(":")[0].strip()
+            elif key == "play_two" and "(Tied with" not in value:
+                parts = value.split(":", 1)[1].split(" and ")
+                if len(parts) >= 2:
+                    play_two_first = parts[0].split("(")[0].strip()
+                    play_two_second = parts[1].split("(")[0].strip()
+
+        if best_even_money:
+            suggestion_highlights[best_even_money] = top_color
+        if best_bet:
+            suggestion_highlights[best_bet] = top_color
+        if play_two_first and play_two_second:
+            if best_bet and play_two_first == best_bet:
+                suggestion_highlights[play_two_first] = top_color
+            else:
+                suggestion_highlights[play_two_first] = top_color
+            suggestion_highlights[play_two_second] = lower_color
+
+    table_layout = [
+        ["", "3", "6", "9", "12", "15", "18", "21", "24", "27", "30", "33", "36"],
+        ["0", "2", "5", "8", "11", "14", "17", "20", "23", "26", "29", "32", "35"],
+        ["", "1", "4", "7", "10", "13", "16", "19", "22", "25", "28", "31", "34"]
+    ]
+
+    html = '<table class="large-table dynamic-roulette-table" border="1" style="border-collapse: collapse; text-align: center; font-size: 14px; font-family: Arial, sans-serif; border-color: black; table-layout: fixed; width: 100%; max-width: 600px;">'
+    html += '<colgroup><col style="width: 40px;">'
+    for _ in range(12):
+        html += '<col style="width: 40px;">'
+    html += '<col style="width: 80px;"></colgroup>'
+
+    hot_numbers = set(hot_numbers) if hot_numbers else set()
+    scores = scores if scores is not None else {}
+
+    for row_idx, row in enumerate(table_layout):
+        html += "<tr>"
+        for num in row:
+            if num == "":
+                html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+            else:
+                base_color = _colors.get(num, "black")
+                highlight_color = number_highlights.get(num, base_color)
+                
+                border_style = "3px solid black"
+                if num in casino_winners["hot_numbers"]:
+                    border_style = "3px solid #FFD700"
+                elif num in casino_winners["cold_numbers"]:
+                    border_style = "3px solid #C0C0C0"
+                
+                text_style = "color: white; font-weight: bold; text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);"
+                cell_class = "hot-number has-tooltip" if num in hot_numbers else "has-tooltip"
+                hit_count = scores.get(num, scores.get(int(num), 0) if num.isdigit() else 0)
+                tooltip = f"Hit {hit_count} times"
+                html += f'<td style="height: 40px; background-color: {highlight_color}; {text_style} border: {border_style}; padding: 0; vertical-align: middle; box-sizing: border-box; text-align: center;" class="{cell_class}" data-tooltip="{tooltip}">{num}</td>'
+        
+        # Add Columns Logic
+        if row_idx == 0:
+            col_name = "3rd Column"
+        elif row_idx == 1:
+            col_name = "2nd Column"
+        elif row_idx == 2:
+            col_name = "1st Column"
+        
+        bg_color = suggestion_highlights.get(col_name, top_color if trending_column == col_name else (middle_color if second_column == col_name else "white"))
+        border_style = "3px dashed #FFD700" if col_name in casino_winners["columns"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        col_score = _state.column_scores.get(col_name, 0)
+        max_col_score = max(_state.column_scores.values(), default=1) or 1
+        fill_percentage = (col_score / max_col_score) * 100
+        html += f'<td style="background-color: {bg_color}; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{col_name}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+        html += "</tr>"
+
+    # Row for Low/High
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    for name, label in [("Low", "Low (1 to 18)"), ("High", "High (19 to 36)")]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_even_money == name else (middle_color if second_even_money == name else (lower_color if third_even_money == name else "white")))
+        border_style = "3px dashed #FFD700" if name in casino_winners["even_money"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = _state.even_money_scores.get(name, 0)
+        max_score = max(_state.even_money_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td colspan="6" style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{label}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    # Row for Dozens
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    for name in ["1st Dozen", "2nd Dozen", "3rd Dozen"]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_dozen == name else (middle_color if second_dozen == name else "white"))
+        border_style = "3px dashed #FFD700" if name in casino_winners["dozens"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = _state.dozen_scores.get(name, 0)
+        max_score = max(_state.dozen_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td colspan="4" style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{name}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    # Row for Even Money
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    html += '<td colspan="4" style="border-color: black; box-sizing: border-box;"></td>'
+    for name, label in [("Odd", "ODD"), ("Red", "RED"), ("Black", "BLACK"), ("Even", "EVEN")]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_even_money == name else (middle_color if second_even_money == name else (lower_color if third_even_money == name else "white")))
+        border_style = "3px dashed #FFD700" if name in casino_winners["even_money"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = _state.even_money_scores.get(name, 0)
+        max_score = max(_state.even_money_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{label}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td colspan="4" style="border-color: black; box-sizing: border-box;"></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    html += "</table>"
+
+    # --- STRATEGY RECOMMENDATIONS: Best Street & Best Corner ---
+    street_scores_active = {k: v for k, v in _state.street_scores.items() if v > 0}
+    corner_scores_active = {k: v for k, v in _state.corner_scores.items() if v > 0}
+
+    if street_scores_active or corner_scores_active:
+        html += '<div style="margin-top: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;">'
+        html += '<div style="font-size: 13px; font-weight: 900; color: #ff00ff; text-transform: uppercase; margin-bottom: 10px; text-align: center; letter-spacing: 1px;">Strategy Recommendations</div>'
+
+        if street_scores_active:
+            sorted_st = sorted(street_scores_active.items(), key=lambda x: x[1], reverse=True)[:5]
+            html += '<div style="margin-bottom: 10px;">'
+            html += '<div style="font-size: 11px; color: #00BFFF; font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #1e3a5f; padding-bottom: 3px;">BEST STREETS (11:1)</div>'
+            for i, (sname, shits) in enumerate(sorted_st):
+                s_short = sname.split(" – ")[0] if " – " in sname else sname
+                s_nums = sorted(STREETS[sname])
+                is_top = (i == 0)
+                bg = "rgba(0, 191, 255, 0.12)" if is_top else "transparent"
+                border = "1px solid #00BFFF" if is_top else "1px solid #1e293b"
+                html += f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: {bg}; border: {border}; border-radius: 4px; margin-bottom: 3px;">'
+                html += f'<span style="color: {"#00BFFF" if is_top else "#64748b"}; font-weight: {"900" if is_top else "normal"}; font-size: 12px;">{"→ " if is_top else ""}{s_short}</span>'
+                html += f'<span style="color: #94a3b8; font-size: 11px;">[{", ".join(str(n) for n in s_nums)}]</span>'
+                html += f'<span style="color: {"#4ade80" if is_top else "#64748b"}; font-weight: bold; font-size: 12px;">{shits}x</span>'
+                html += '</div>'
+            html += '</div>'
+
+        if corner_scores_active:
+            sorted_co = sorted(corner_scores_active.items(), key=lambda x: x[1], reverse=True)[:5]
+            html += '<div>'
+            html += '<div style="font-size: 11px; color: #FFD700; font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #5a4500; padding-bottom: 3px;">BEST CORNERS (8:1)</div>'
+            for i, (cname, chits) in enumerate(sorted_co):
+                c_short = cname.split(" – ")[0] if " – " in cname else cname
+                c_nums_display = cname.split(" – ")[1] if " – " in cname else ""
+                is_top = (i == 0)
+                bg = "rgba(255, 215, 0, 0.12)" if is_top else "transparent"
+                border = "1px solid #FFD700" if is_top else "1px solid #1e293b"
+                html += f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: {bg}; border: {border}; border-radius: 4px; margin-bottom: 3px;">'
+                html += f'<span style="color: {"#FFD700" if is_top else "#64748b"}; font-weight: {"900" if is_top else "normal"}; font-size: 12px;">{"→ " if is_top else ""}{c_short}</span>'
+                html += f'<span style="color: #94a3b8; font-size: 11px;">[{c_nums_display}]</span>'
+                html += f'<span style="color: {"#4ade80" if is_top else "#64748b"}; font-weight: bold; font-size: 12px;">{chits}x</span>'
+                html += '</div>'
+            html += '</div>'
+
+        html += '</div>'
+
+    return html
+
+
+def create_dynamic_table(strategy_name=None, neighbours_count=2, strong_numbers_count=1, dozen_tracker_spins=5, top_color=None, middle_color=None, lower_color=None, tracked_tiers=None):
+    try:
+        # Default tracked tiers if None
+        if tracked_tiers is None: tracked_tiers = ["Yellow (Top)", "Cyan (Middle)"]
+
+        # Ensure Colors are Resolved (Defaulting if None)
+        top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"
+        middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"
+        lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"
+
+        logger.debug(f"create_dynamic_table called with strategy: {strategy_name}, neighbours_count: {neighbours_count}, tracked_tiers: {tracked_tiers}")
+        
+        logger.debug("create_dynamic_table: Calculating trending sections")
+        sorted_sections = _calculate_trending_fn()
+        logger.debug(f"create_dynamic_table: sorted_sections={sorted_sections}")
+        
+        # If no spins yet, initialize with default even money focus
+        if sorted_sections is None and strategy_name == "Best Even Money Bets":
+            logger.debug("create_dynamic_table: No spins yet, using default even money focus")
+            trending_even_money = "Red"  # Default to "Red" as an example
+            second_even_money = "Black"
+            third_even_money = "Even"
+            trending_dozen = None
+            second_dozen = None
+            trending_column = None
+            second_column = None
+            number_highlights = {}
+            top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"
+            middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"
+            lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"
+            suggestions = None
+            hot_numbers = []  # No hot numbers without spins
+        else:
+            logger.debug("create_dynamic_table: Applying strategy highlights")
+            trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions = apply_strategy_highlights(strategy_name, int(dozen_tracker_spins) if strategy_name == "None" else neighbours_count, strong_numbers_count, sorted_sections, top_color, middle_color, lower_color)
+            
+            # --- FIX: TRANSLATE VISUAL HIGHLIGHTS TO DATA FOR AUTO-PILOT ---
+            # Strict Logic: Only numbers belonging to the CHECKED color tiers are valid targets.
+            # If a tier is UNCHECKED, its numbers are NOT added, effectively treating them as "Losses" 
+            # (unless they overlap with a Checked tier).
+            active_targets = set()
+            
+            # Helper to check if a specific color string matches the user's "Yellow/Cyan/Green" selection
+            # We compare the RGBA strings directly.
+            def is_color_tracked(color_val):
+                if color_val == top_color and "Yellow (Top)" in tracked_tiers: return True
+                if color_val == middle_color and "Cyan (Middle)" in tracked_tiers: return True
+                if color_val == lower_color and "Green (Lower)" in tracked_tiers: return True
+                return False
+
+            # 1. Collect straight-up numbers (e.g. from Number Strategies)
+            if number_highlights:
+                for num_str, color in number_highlights.items():
+                    if num_str.isdigit():
+                        if is_color_tracked(color):
+                            active_targets.add(int(num_str))
+            
+            # 2. Collect numbers from Section Highlights (Even Money)
+            # Only add if the SECTION's color matches a CHECKED tier.
+            # Even Money Logic:
+            em_map = {
+                trending_even_money: top_color,
+                second_even_money: middle_color,
+                third_even_money: lower_color
+            }
+            for em_name, em_color in em_map.items():
+                if em_name and em_name in EVEN_MONEY and is_color_tracked(em_color):
+                    active_targets.update(EVEN_MONEY[em_name])
+
+            # 3. Collect numbers from Section Highlights (Dozens)
+            # Dozen Logic:
+            dz_map = {
+                trending_dozen: top_color,
+                second_dozen: middle_color
+            }
+            for dz_name, dz_color in dz_map.items():
+                if dz_name and dz_name in DOZENS and is_color_tracked(dz_color):
+                    active_targets.update(DOZENS[dz_name])
+            
+            # 4. Collect numbers from Section Highlights (Columns)
+            # Column Logic:
+            col_map = {
+                trending_column: top_color,
+                second_column: middle_color
+            }
+            for col_name, col_color in col_map.items():
+                if col_name and col_name in COLUMNS and is_color_tracked(col_color):
+                    active_targets.update(COLUMNS[col_name])
+
+            # 5. Save to global state for the Auto-Pilot to read
+            _state.active_strategy_targets = sorted(list(active_targets))
+            logger.debug(f"DEBUG: Auto-Pilot Targets Updated ({tracked_tiers}): {len(_state.active_strategy_targets)} numbers covered")
+            # ---------------------------------------------------------------
+
+            logger.debug(f"create_dynamic_table: Strategy highlights applied - trending_even_money={trending_even_money}, second_even_money={second_even_money}, third_even_money={third_even_money}, trending_dozen={trending_dozen}, second_dozen={second_dozen}, trending_column={trending_column}, second_column={second_column}, number_highlights={number_highlights}")
+            
+            # Determine hot numbers (top 5 with hits)
+            sorted_scores = sorted(_state.scores.items(), key=lambda x: x[1], reverse=True)
+            hot_numbers = [str(num) for num, score in sorted_scores[:5] if score > 0]
+            logger.debug(f"create_dynamic_table: Hot numbers={hot_numbers}, Scores={dict(_state.scores)}")
+        
+        # If still no highlights and no sorted_sections, provide a default message
+        if sorted_sections is None and not any([trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights]):
+            logger.debug("create_dynamic_table: No spins and no highlights, returning default message")
+            return "<p>No spins yet. Select a strategy to see default highlights.</p>"
+        
+        logger.debug("create_dynamic_table: Rendering dynamic table HTML")
+        html = render_dynamic_table_html(trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions, hot_numbers, scores=_state.scores)
+        logger.debug("create_dynamic_table: Table generated successfully")
+        return html
+    
+    except Exception as e:
+        logger.error(f"create_dynamic_table: Error: {str(e)}\n{traceback.format_exc()}")
+        return "<div style='color:#ef4444;padding:8px;'>⚠️ Table rendering error — spins are preserved.</div>"
