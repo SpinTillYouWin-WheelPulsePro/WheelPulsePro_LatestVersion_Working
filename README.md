@@ -9,4 +9,6 @@ app_file: app.py
 pinned: false
 python_version: "3.10"
 startup_duration_timeout: 10m
+preload_from_hub:
+- SpinTillYouWin-WheelPulsePro/WheelPulsePro_LatestVersion_Working
 ---
