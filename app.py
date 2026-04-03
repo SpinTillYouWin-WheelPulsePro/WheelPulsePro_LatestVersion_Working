@@ -24,158 +24,87 @@ from wheelpulsepro.mappings import (
     validate_roulette_data,
 )
 from wheelpulsepro.scoring import update_scores_batch as _core_update_scores_batch
-import wheelpulsepro.scoring as _scoring
 from wheelpulsepro.spins import MAX_SPINS, parse_spins_input, validate_spins
-import sys as _sys
-import importlib.util as _importlib_util
+import wheelpulsepro.rendering as _rendering
+from wheelpulsepro import strategies
+from wheelpulsepro import trackers
+from wheelpulsepro import analysis
+from wheelpulsepro import sessions
+from wheelpulsepro.sessions import (
+    save_session,
+    combine_sessions,
+    load_session,
+    analyze_spins,
+    undo_last_spin,
+    clear_spins,
+    generate_random_spins,
+    play_specific_numbers,
+)
 from wheelpulsepro.persistence import autosave, autorestore
-
-# ✅ Sync Test: GitHub → Hugging Face pipeline verified (2026-03-29)
-
-
-def _lazy_module(name: str):
-    """Return a lazily-loaded module; its body runs only on first attribute access.
-
-    Using importlib.util.LazyLoader defers parsing, compilation, and execution
-    of the module until the first attribute is accessed, which keeps app.py
-    import time fast on HF Spaces free tier (avoids init-timeout errors).
-    """
-    if name in _sys.modules:
-        return _sys.modules[name]
-    spec = _importlib_util.find_spec(name)
-    loader = _importlib_util.LazyLoader(spec.loader)
-    spec.loader = loader
-    module = _importlib_util.module_from_spec(spec)
-    _sys.modules[name] = module
-    loader.exec_module(module)
-    return module
-
-
-# ---------------------------------------------------------------------------
-# Heavy modules — deferred until first user interaction to keep startup fast.
-# The actual module bodies (222 KB rendering, 203 KB trackers, 91 KB analysis,
-# 81 KB strategies, 36 KB sessions) are only compiled and executed on first
-# attribute access, so demo.launch() is reached well within HF Spaces' timeout.
-# ---------------------------------------------------------------------------
-_rendering = _lazy_module("wheelpulsepro.rendering")
-strategies = _lazy_module("wheelpulsepro.strategies")
-trackers   = _lazy_module("wheelpulsepro.trackers")
-analysis   = _lazy_module("wheelpulsepro.analysis")
-sessions   = _lazy_module("wheelpulsepro.sessions")
-_ui_logic  = _lazy_module("wheelpulsepro.ui_logic")
-
-# Thin wrappers for names previously imported directly from heavy modules.
-# Keeping the original names means zero changes to call sites in callbacks.
-
-# -- wheelpulsepro.sessions --
-def save_session(*args, **kwargs): return sessions.save_session(*args, **kwargs)
-def combine_sessions(*args, **kwargs): return sessions.combine_sessions(*args, **kwargs)
-def load_session(*args, **kwargs): return sessions.load_session(*args, **kwargs)
-def analyze_spins(*args, **kwargs): return sessions.analyze_spins(*args, **kwargs)
-def undo_last_spin(*args, **kwargs): return sessions.undo_last_spin(*args, **kwargs)
-def clear_spins(*args, **kwargs): return sessions.clear_spins(*args, **kwargs)
-def generate_random_spins(*args, **kwargs): return sessions.generate_random_spins(*args, **kwargs)
-def play_specific_numbers(*args, **kwargs): return sessions.play_specific_numbers(*args, **kwargs)
-
-# -- wheelpulsepro.analysis --
-def statistical_insights(*args, **kwargs): return analysis.statistical_insights(*args, **kwargs)
-def calculate_hit_percentages(*args, **kwargs): return analysis.calculate_hit_percentages(*args, **kwargs)
-def summarize_spin_traits(*args, **kwargs): return analysis.summarize_spin_traits(*args, **kwargs)
-def cache_analysis(*args, **kwargs): return analysis.cache_analysis(*args, **kwargs)
-def select_next_spin_top_pick(*args, **kwargs): return analysis.select_next_spin_top_pick(*args, **kwargs)
-def create_html_table(*args, **kwargs): return analysis.create_html_table(*args, **kwargs)
-def render_rank_table(*args, **kwargs): return analysis.render_rank_table(*args, **kwargs)
-def create_strongest_numbers_with_neighbours_table(*args, **kwargs): return analysis.create_strongest_numbers_with_neighbours_table(*args, **kwargs)
-
-# -- wheelpulsepro.trackers (callables) --
-def de2d_tracker_logic(*args, **kwargs): return trackers.de2d_tracker_logic(*args, **kwargs)
-def dozen_tracker(*args, **kwargs): return trackers.dozen_tracker(*args, **kwargs)
-def _dozen_tracker_inner(*args, **kwargs): return trackers._dozen_tracker_inner(*args, **kwargs)
-def even_money_tracker(*args, **kwargs): return trackers.even_money_tracker(*args, **kwargs)
-def _even_money_tracker_inner(*args, **kwargs): return trackers._even_money_tracker_inner(*args, **kwargs)
-def _coerce_int(*args, **kwargs): return trackers._coerce_int(*args, **kwargs)
-def _clamp(*args, **kwargs): return trackers._clamp(*args, **kwargs)
-def _safe_slider_val(*args, **kwargs): return trackers._safe_slider_val(*args, **kwargs)
-
-# -- wheelpulsepro.rendering (migrated rendering functions) --
-def _extract_cards_fingerprint(*args, **kwargs): return _rendering._extract_cards_fingerprint(*args, **kwargs)
-def render_alerts_bar_html(*args, **kwargs): return _rendering.render_alerts_bar_html(*args, **kwargs)
-def render_master_information_summary_html(*args, **kwargs): return _rendering.render_master_information_summary_html(*args, **kwargs)
-def render_cards_and_alerts(*args, **kwargs): return _rendering.render_cards_and_alerts(*args, **kwargs)
-def render_ai_coach_html(*args, **kwargs): return _rendering.render_ai_coach_html(*args, **kwargs)
-def render_master_info_both(*args, **kwargs): return _rendering.render_master_info_both(*args, **kwargs)
-def highlight_even_money(*args, **kwargs): return _rendering.highlight_even_money(*args, **kwargs)
-def highlight_dozens(*args, **kwargs): return _rendering.highlight_dozens(*args, **kwargs)
-def highlight_columns(*args, **kwargs): return _rendering.highlight_columns(*args, **kwargs)
-def highlight_numbers(*args, **kwargs): return _rendering.highlight_numbers(*args, **kwargs)
-def highlight_other_bets(*args, **kwargs): return _rendering.highlight_other_bets(*args, **kwargs)
-def highlight_neighbors(*args, **kwargs): return _rendering.highlight_neighbors(*args, **kwargs)
-def apply_strategy_highlights(*args, **kwargs): return _rendering.apply_strategy_highlights(*args, **kwargs)
-def render_dynamic_table_html(*args, **kwargs): return _rendering.render_dynamic_table_html(*args, **kwargs)
-def create_dynamic_table(*args, **kwargs): return _rendering.create_dynamic_table(*args, **kwargs)
-
-# -- wheelpulsepro.ui_logic (migrated UI/state helpers) --
-def _sync_strategy_flags_from_hud_filters(*args, **kwargs): return _ui_logic._sync_strategy_flags_from_hud_filters(*args, **kwargs)
-def validate_spins_input(*args, **kwargs): return _ui_logic.validate_spins_input(*args, **kwargs)
-def add_spin(*args, **kwargs): return _ui_logic.add_spin(*args, **kwargs)
-def reset_scores(*args, **kwargs): return _ui_logic.reset_scores(*args, **kwargs)
-def clear_all(*args, **kwargs): return _ui_logic.clear_all(*args, **kwargs)
-def master_reset(*args, **kwargs): return _ui_logic.master_reset(*args, **kwargs)
-def reset_strategy_dropdowns(*args, **kwargs): return _ui_logic.reset_strategy_dropdowns(*args, **kwargs)
-def update_spin_counter(*args, **kwargs): return _ui_logic.update_spin_counter(*args, **kwargs)
-def sync_spins_display(*args, **kwargs): return _ui_logic.sync_spins_display(*args, **kwargs)
-def validate_hot_cold_numbers(*args, **kwargs): return _ui_logic.validate_hot_cold_numbers(*args, **kwargs)
-def clear_hot_cold_picks(*args, **kwargs): return _ui_logic.clear_hot_cold_picks(*args, **kwargs)
-
-# -- wheelpulsepro.scoring (drought counters) --
-def _update_drought_counters(*args, **kwargs): return _scoring._update_drought_counters(*args, **kwargs)
-
-
-# _DE2D_SLIDER_CFG and _nudge_state are mutable dicts/lists shared between
-# app.py callbacks and trackers.py internals.  They cannot be safely imported
-# at module load time because trackers.py is lazy.  Instead they are bound to
-# the actual objects inside _on_page_load() (the demo.load handler), which
-# runs before any user interaction is possible.
-_DE2D_SLIDER_CFG = None  # bound to trackers._DE2D_SLIDER_CFG in _on_page_load
-_nudge_state = None      # bound to trackers._nudge_state in _on_page_load
-
-# -- wheelpulsepro.strategies --
-def calculate_top_pick_movement(*args, **kwargs): return strategies.calculate_top_pick_movement(*args, **kwargs)
-def calculate_trending_sections(*args, **kwargs): return strategies.calculate_trending_sections(*args, **kwargs)
-def get_strongest_numbers_with_neighbors(*args, **kwargs): return strategies.get_strongest_numbers_with_neighbors(*args, **kwargs)
-def best_even_money_bets(*args, **kwargs): return strategies.best_even_money_bets(*args, **kwargs)
-def hot_bet_strategy(*args, **kwargs): return strategies.hot_bet_strategy(*args, **kwargs)
-def cold_bet_strategy(*args, **kwargs): return strategies.cold_bet_strategy(*args, **kwargs)
-def best_dozens(*args, **kwargs): return strategies.best_dozens(*args, **kwargs)
-def best_columns(*args, **kwargs): return strategies.best_columns(*args, **kwargs)
-def fibonacci_strategy(*args, **kwargs): return strategies.fibonacci_strategy(*args, **kwargs)
-def best_streets(*args, **kwargs): return strategies.best_streets(*args, **kwargs)
-def sniper_best_street_corner(*args, **kwargs): return strategies.sniper_best_street_corner(*args, **kwargs)
-def best_double_streets(*args, **kwargs): return strategies.best_double_streets(*args, **kwargs)
-def best_corners(*args, **kwargs): return strategies.best_corners(*args, **kwargs)
-def best_splits(*args, **kwargs): return strategies.best_splits(*args, **kwargs)
-def best_dozens_and_streets(*args, **kwargs): return strategies.best_dozens_and_streets(*args, **kwargs)
-def best_columns_and_streets(*args, **kwargs): return strategies.best_columns_and_streets(*args, **kwargs)
-def non_overlapping_double_street_strategy(*args, **kwargs): return strategies.non_overlapping_double_street_strategy(*args, **kwargs)
-def non_overlapping_corner_strategy(*args, **kwargs): return strategies.non_overlapping_corner_strategy(*args, **kwargs)
-def romanowksy_missing_dozen_strategy(*args, **kwargs): return strategies.romanowksy_missing_dozen_strategy(*args, **kwargs)
-def fibonacci_to_fortune_strategy(*args, **kwargs): return strategies.fibonacci_to_fortune_strategy(*args, **kwargs)
-def three_eight_six_rising_martingale(*args, **kwargs): return strategies.three_eight_six_rising_martingale(*args, **kwargs)
-def one_dozen_one_column_strategy(*args, **kwargs): return strategies.one_dozen_one_column_strategy(*args, **kwargs)
-def top_pick_18_numbers_without_neighbours(*args, **kwargs): return strategies.top_pick_18_numbers_without_neighbours(*args, **kwargs)
-def best_column_till_tie_break(*args, **kwargs): return strategies.best_column_till_tie_break(*args, **kwargs)
-def best_dozen_till_tie_break(*args, **kwargs): return strategies.best_dozen_till_tie_break(*args, **kwargs)
-def best_even_money_bet_till_tie_break(*args, **kwargs): return strategies.best_even_money_bet_till_tie_break(*args, **kwargs)
-def best_even_money_and_top_18(*args, **kwargs): return strategies.best_even_money_and_top_18(*args, **kwargs)
-def best_dozens_and_top_18(*args, **kwargs): return strategies.best_dozens_and_top_18(*args, **kwargs)
-def best_columns_and_top_18(*args, **kwargs): return strategies.best_columns_and_top_18(*args, **kwargs)
-def best_dozens_even_money_and_top_18(*args, **kwargs): return strategies.best_dozens_even_money_and_top_18(*args, **kwargs)
-def best_columns_even_money_and_top_18(*args, **kwargs): return strategies.best_columns_even_money_and_top_18(*args, **kwargs)
-def top_numbers_with_neighbours_tiered(*args, **kwargs): return strategies.top_numbers_with_neighbours_tiered(*args, **kwargs)
-def neighbours_of_strong_number(*args, **kwargs): return strategies.neighbours_of_strong_number(*args, **kwargs)
+from wheelpulsepro.analysis import (
+    statistical_insights,
+    calculate_hit_percentages,
+    summarize_spin_traits,
+    cache_analysis,
+    select_next_spin_top_pick,
+    create_html_table,
+    render_rank_table,
+    create_strongest_numbers_with_neighbours_table,
+)
+from wheelpulsepro.trackers import (
+    de2d_tracker_logic,
+    dozen_tracker,
+    _dozen_tracker_inner,
+    even_money_tracker,
+    _even_money_tracker_inner,
+)
+# _DE2D_SLIDER_CFG, _nudge_state, and slider utilities live in wheelpulsepro/trackers.py;
+# re-imported here so that existing app.py callbacks use the same objects.
+from wheelpulsepro.trackers import (
+    _DE2D_SLIDER_CFG,
+    _nudge_state,
+    _coerce_int,
+    _clamp,
+    _safe_slider_val,
+)
+from wheelpulsepro.strategies import (
+    calculate_top_pick_movement,
+    calculate_trending_sections,
+    get_strongest_numbers_with_neighbors,
+    best_even_money_bets,
+    hot_bet_strategy,
+    cold_bet_strategy,
+    best_dozens,
+    best_columns,
+    fibonacci_strategy,
+    best_streets,
+    sniper_best_street_corner,
+    best_double_streets,
+    best_corners,
+    best_splits,
+    best_dozens_and_streets,
+    best_columns_and_streets,
+    non_overlapping_double_street_strategy,
+    non_overlapping_corner_strategy,
+    romanowksy_missing_dozen_strategy,
+    fibonacci_to_fortune_strategy,
+    three_eight_six_rising_martingale,
+    one_dozen_one_column_strategy,
+    top_pick_18_numbers_without_neighbours,
+    best_column_till_tie_break,
+    best_dozen_till_tie_break,
+    best_even_money_bet_till_tie_break,
+    best_even_money_and_top_18,
+    best_dozens_and_top_18,
+    best_columns_and_top_18,
+    best_dozens_even_money_and_top_18,
+    best_columns_even_money_and_top_18,
+    top_numbers_with_neighbours_tiered,
+    neighbours_of_strong_number,
+)
 
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -231,8 +160,79 @@ def update_scores_batch(spins):
     )
 
 
+def _update_drought_counters():
+    """Recompute state.drought_counters from state.last_spins.
+
+    Scans spins in reverse order to find how many spins have elapsed since
+    each tracked category (dozens, columns, even-money) last hit.  O(N) where
+    N = len(state.last_spins).
+    """
+    try:
+        _update_drought_counters_inner()
+    except Exception as e:
+        logger.exception("Failed to update drought counters")
 
 
+def _update_drought_counters_inner():
+    if not hasattr(state, 'drought_counters'):
+        return
+    if not hasattr(state, 'last_spins'):
+        return
+
+    _DOZEN_RANGES = {
+        "1st Dozen": range(1, 13),
+        "2nd Dozen": range(13, 25),
+        "3rd Dozen": range(25, 37),
+    }
+    _COL_NUMS = {
+        "1st Column": {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34},
+        "2nd Column": {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35},
+        "3rd Column": {3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36},
+    }
+    _RED = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
+    _BLACK = {2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35}
+
+    # For each category, drought = number of spins from the end until (not including) last hit
+    _all_categories = (
+        list(_DOZEN_RANGES.keys())
+        + list(_COL_NUMS.keys())
+        + ["Red", "Black", "Even", "Odd", "Low", "High"]
+    )
+
+    def _hits(n, cat):
+        if cat in _DOZEN_RANGES:
+            return n in _DOZEN_RANGES[cat]
+        if cat in _COL_NUMS:
+            return n in _COL_NUMS[cat]
+        if cat == "Red":
+            return n in _RED
+        if cat == "Black":
+            return n in _BLACK
+        if cat == "Even":
+            return n != 0 and n % 2 == 0
+        if cat == "Odd":
+            return n != 0 and n % 2 == 1
+        if cat == "Low":
+            return 1 <= n <= 18
+        if cat == "High":
+            return 19 <= n <= 36
+        return False
+
+    for cat in _all_categories:
+        d = 0
+        for spin_str in reversed(state.last_spins):
+            try:
+                num = int(spin_str)
+            except (ValueError, TypeError):
+                d += 1
+                continue
+            if not (0 <= num <= 36):
+                d += 1
+                continue
+            if _hits(num, cat):
+                break
+            d += 1
+        state.drought_counters[cat] = d
 
 state = RouletteState()
 # Attempt to restore the last auto-saved state (survives restarts/redeploys).
@@ -251,9 +251,7 @@ current_neighbors = NEIGHBORS_EUROPEAN
 current_left_of_zero = set(LEFT_OF_ZERO_EUROPEAN)
 current_right_of_zero = set(RIGHT_OF_ZERO_EUROPEAN)
 
-# Inject state and neighbor lookup into the strategies module.
-# Calling init() here triggers the lazy loads so modules are ready before
-# demo.launch() is called.  This keeps the Gradio startup events lightweight.
+# Inject state and neighbor lookup into the strategies module
 strategies.init(state, current_neighbors)
 
 scores = {n: 0 for n in range(37)}
@@ -281,13 +279,6 @@ colors = {
 
 trackers.init(state, colors, _HUD_DEFAULT_VISIBLE)
 analysis.init(state, colors, current_neighbors)
-# Bind the shared data objects after trackers has been loaded by init()
-_DE2D_SLIDER_CFG = trackers._DE2D_SLIDER_CFG
-_nudge_state = trackers._nudge_state
-
-# Inject state into rendering and scoring for their zero-arg helpers
-_rendering.init_app(state, current_neighbors, colors)
-_scoring.init_drought(state)
 
 # Lines before (context)
 def format_spins_as_html(spins, num_to_show, show_trends=True):
@@ -350,31 +341,454 @@ def render_master_information_html(precomputed_recommendation=None):
         return _rendering._FALLBACK_MASTER_INFO_HTML
 
 
+def render_master_information_summary_html(precomputed_recommendation=None):
+    """Render a compact one-liner summary for the Master Information section.
+
+    Always visible above the collapsed accordion, showing the current best
+    bet label, master score, and analysis window so the user can glance at
+    the recommendation without expanding the section.
+    """
+    try:
+        ranked = (
+            precomputed_recommendation
+            if precomputed_recommendation is not None
+            else _rendering.compute_last_money_recommendation(state)
+        )
+        if not ranked:
+            return ""
+        best = ranked[0]
+        last_spins = getattr(state, 'last_spins', [])
+        n = len(last_spins)
+        if n < 3:
+            return ""
+        W = min(getattr(_rendering, '_MI_WINDOW', 36), n)
+        score_pct = int(best['score'] * 100)
+        return (
+            f'<div style="background:linear-gradient(90deg,#1e1b4b,#0f172a);'
+            f'border:1px solid #7c3aed;border-radius:8px;padding:8px 14px;'
+            f'margin-bottom:6px;display:flex;align-items:center;gap:12px;'
+            f'font-family:\'Segoe UI\',system-ui,sans-serif;flex-wrap:wrap;">'
+            f'<span style="color:#a78bfa;font-size:11px;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:1px;white-space:nowrap;">🎯 Last Bet:</span>'
+            f'<span style="color:#fff;font-size:14px;font-weight:900;white-space:nowrap;">'
+            f'{best["label"]}</span>'
+            f'<span style="color:#94a3b8;font-size:11px;white-space:nowrap;">'
+            f'Score&nbsp;<b style="color:#c4b5fd;">{score_pct}</b>&nbsp;·&nbsp;'
+            f'W=<b style="color:#c4b5fd;">{W}</b></span>'
+            f'</div>'
+        )
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
 # In-app Alerts system (server-side; no JS popups — avoids connection errors)
 # ---------------------------------------------------------------------------
 
+# Module-level state: tracks the currently-active cards from the latest render.
+_prev_active_cards: dict = {}   # {card_key: headline_str} from latest render
 
 
 
 
+def _extract_cards_fingerprint(html: str) -> dict:
+    """Extract a ``{card_key: headline_str}`` dict from strategy-cards HTML.
+
+    The card_key is the hud-title text (stable card ID).  The headline_str
+    equals the card title for regular strategy cards and the brain
+    recommendation target for the ``__brain__`` entry.
+
+    Fails gracefully — never raises an exception.
+    """
+    result: dict = {}
+    try:
+        for title in re.findall(r'class="hud-title"[^>]*>\s*([^<]+?)\s*<', html):
+            title = title.strip()
+            if title and 'SCANNING' not in title.upper():
+                # Value equals key: for strategy cards the title is both the
+                # stable ID and the headline (the card's content doesn't change
+                # headline independently the way the brain recommendation does).
+                result[title] = title
+        brain = re.search(r'I would target\s*<b[^>]*>\s*([^<]+?)\s*<', html)
+        if brain:
+            result['__brain__'] = brain.group(1).strip()
+    except Exception:
+        pass
+    return result
 
 
+def render_alerts_bar_html() -> str:
+    """Render the sticky Alerts Bar showing currently-active strategy cards only.
+
+    Reflects the *current* set of visible/active strategy cards. When a card
+    disappears it is automatically removed from the bar on the next render —
+    no manual clearing required.
+
+    The sticky positioning is handled by the ``_EXTRA_CSS`` passed to
+    ``gr.Blocks``; this function returns only the bar's inner HTML content.
+    Returns a safe HTML string; never raises an exception.
+    """
+    try:
+        card_names = [k for k in _prev_active_cards if k != '__brain__']
+
+        if not card_names:
+            return (
+                "<div id='wp-alerts-bar' style='"
+                "background:rgba(15,23,42,0.85);padding:7px 16px;"
+                "display:flex;align-items:center;gap:12px;"
+                "font-family:system-ui,sans-serif;font-size:13px;"
+                "color:rgba(255,255,255,0.4);'>"
+                "🔔 No active strategy alerts"
+                "</div>"
+            )
+
+        parts = []
+        for name in card_names:
+            parts.append(
+                f"<span style='display:inline-flex;align-items:center;gap:5px;"
+                f"background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.5);"
+                f"border-radius:6px;padding:3px 10px;font-size:12px;color:#fca5a5;"
+                f"white-space:nowrap;'>"
+                f"🚨&nbsp;<b style='color:#fca5a5;'>{name}</b>"
+                f"</span>"
+            )
+
+        count_badge = (
+            f"<span style='background:#ef4444;color:#fff;border-radius:12px;"
+            f"padding:2px 9px;font-size:11px;font-weight:700;white-space:nowrap;"
+            f"flex-shrink:0;'>"
+            f"Active: {len(card_names)}"
+            f"</span>"
+        )
+
+        _corner_style = (
+            "position:absolute;width:7px;height:7px;"
+            "border-radius:1px;background:#ef4444;"
+            "animation:wpCornerPulse 1.4s ease-in-out infinite;"
+        )
+        corners = (
+            f"<span style='{_corner_style}top:3px;left:3px;'></span>"
+            f"<span style='{_corner_style}top:3px;right:3px;animation-delay:0.35s;'></span>"
+            f"<span style='{_corner_style}bottom:3px;left:3px;animation-delay:0.7s;'></span>"
+            f"<span style='{_corner_style}bottom:3px;right:3px;animation-delay:1.05s;'></span>"
+        )
+
+        return (
+            "<style>"
+            "@keyframes wpBarGlow{"
+            "0%,100%{box-shadow:0 0 12px rgba(239,68,68,0.15),0 2px 12px rgba(239,68,68,0.1);}"
+            "50%{box-shadow:0 0 24px rgba(239,68,68,0.4),0 2px 20px rgba(239,68,68,0.25);}}"
+            "@keyframes wpCornerPulse{"
+            "0%,100%{opacity:1;transform:scale(1);}"
+            "50%{opacity:0.35;transform:scale(1.6);}}"
+            "</style>"
+            f"<div id='wp-alerts-bar' style='"
+            f"position:relative;"
+            f"background:linear-gradient(90deg,#1a0505,#0f172a);"
+            f"border-left:3px solid #ef4444;"
+            f"padding:7px 16px;"
+            f"display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
+            f"font-family:system-ui,sans-serif;"
+            f"animation:wpBarGlow 2.5s ease-in-out infinite;"
+            f"transition:background 0.5s ease,border-color 0.5s ease,box-shadow 0.5s ease;'>"
+            f"{corners}"
+            f"<span style='font-size:15px;flex-shrink:0;'>🔔</span>"
+            f"{''.join(parts)}"
+            f"{count_badge}"
+            f"</div>"
+        )
+    except Exception as e:
+        logger.error(f"render_alerts_bar_html error: {e}")
+        return ""
 
 
+def render_cards_and_alerts(*args):
+    """Render strategy cards and update the Alerts Bar.
+
+    Returns ``(cards_html, alerts_bar_html)`` for use as outputs of Gradio
+    callbacks that update ``strategy_cards_area`` and ``alerts_bar_output``.
+
+    The Alerts Bar reflects the *current* set of visible/active cards; cards
+    that disappear are automatically removed on the next render — no history
+    or manual clearing is needed.
+
+    All steps are wrapped in try/except so alert failures can never crash the
+    core card-rendering logic.
+    """
+    global _prev_active_cards
+    try:
+        cards_html = render_strategy_cards_area_html(*args)
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: render error: {e}")
+        cards_html = ""
+
+    try:
+        _prev_active_cards = _extract_cards_fingerprint(cards_html)
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: fingerprint error: {e}")
+
+    try:
+        alerts_bar = render_alerts_bar_html()
+    except Exception as e:
+        logger.error(f"render_cards_and_alerts: alert render error: {e}")
+        alerts_bar = ""
+
+    return cards_html, alerts_bar
 
 
+def render_ai_coach_html(precomputed_recommendation=None, pinned_numbers_raw=None):
+    """Return the live Pulse AI Coach HTML, reading from module-level state."""
+    try:
+        return _rendering.render_ai_coach_prompt_html(
+            state,
+            precomputed_recommendation=precomputed_recommendation,
+            pinned_numbers_raw=pinned_numbers_raw,
+        )
+    except Exception as e:
+        logger.error(f"render_ai_coach_html error: {e}")
+        return ""
 
 
+def render_master_info_both(pinned_numbers_raw=None):
+    """Return ``(summary_html, detail_html, ai_coach_html)`` for all three components.
+
+    Used in callbacks so a single ``.then()`` step updates the compact summary
+    strip, the full detail panel, and the Pulse AI Coach together.
+
+    ``compute_last_money_recommendation`` is called **once** here and the result
+    is forwarded to all three renderers to avoid redundant expensive computation.
+    """
+    try:
+        ranked = _rendering.compute_last_money_recommendation(state)
+        return (
+            render_master_information_summary_html(ranked),
+            render_master_information_html(ranked),
+            render_ai_coach_html(ranked, pinned_numbers_raw=pinned_numbers_raw),
+        )
+    except Exception as e:
+        logger.error(f"render_master_info_both error: {e}")
+        return "", "", ""
 
 
+def _sync_strategy_flags_from_hud_filters(hud_filters):
+    """Sync strategy_enabled state flags from HUD visibility filter selections.
+
+    Called whenever the hud_visibility_filters CheckboxGroup changes so that
+    _render_final_brain_html_inner can gate Active Strategy Cards correctly.
+    """
+    try:
+        filters = hud_filters or []
+        state.strategy_sniper_enabled = "Sniper Strike" in filters
+        state.strategy_trinity_enabled = "Cold Trinity" in filters
+        state.strategy_nr_enabled = "Non-Repeaters" in filters
+        state.strategy_ramp_enabled = "Ramp/Grind/X-19" in filters
+        state.strategy_grind_enabled = "Ramp/Grind/X-19" in filters
+        # Labouchere is controlled by starting a Lab session, not the HUD filter
+    except Exception as e:
+        logger.error(f"_sync_strategy_flags_from_hud_filters error: {e}")
 
 
+def validate_spins_input(spins_input):
+    """Validate manually entered spins and update state."""
+    start_time = time.time()
 
+    logger.debug(f"validate_spins_input: Processing spins_input='{spins_input}'")
+    try:
+        if not spins_input or not spins_input.strip():
+            logger.debug("validate_spins_input: No spins input provided.")
+            return "", "<h4>Last Spins</h4><p>No spins entered.</p>"
+
+        # Delegate parsing and validation to wheelpulsepro.spins (no Gradio inside)
+        raw_spins = parse_spins_input(spins_input)
+        if len(raw_spins) > MAX_SPINS:
+            error_msg = f"Too many spins ({len(raw_spins)}). Maximum allowed is {MAX_SPINS}."
+            gr.Warning(error_msg)
+            logger.debug(f"validate_spins_input: Error - {error_msg}")
+            return "", f"<h4>Last Spins</h4><p>{error_msg}</p>"
+
+        valid_spins, errors = validate_spins(raw_spins)
+
+        if not valid_spins:
+            error_msg = "No valid spins found:\n- " + "\n- ".join(errors) + "\nUse comma-separated integers between 0 and 36 (e.g., 5, 12, 0)."
+            gr.Warning(error_msg)
+            logger.debug(f"validate_spins_input: Errors - {error_msg}")
+            return "", f"<h4>Last Spins</h4><p>{error_msg}</p>"
+
+        # Update state and scores
+        state.last_spins = valid_spins
+        state.selected_numbers = set(int(s) for s in valid_spins)
+        action_log = update_scores_batch(valid_spins)
+        for i, spin in enumerate(valid_spins):
+            state.spin_history.append(action_log[i])
+            if len(state.spin_history) > 100:
+                state.spin_history.pop(0)
+        _update_drought_counters()
+
+        spins_display_value = ", ".join(valid_spins)
+        formatted_html = format_spins_as_html(spins_display_value, 36)
+
+        logger.debug(f"validate_spins_input: Processed {len(valid_spins)} valid spins, spins_display_value='{spins_display_value}', time={time.time() - start_time:.3f}s")
+        if errors:
+            logger.debug(f"validate_spins_input: Ignored invalid inputs (errors): {errors}")
+
+        if errors:
+            warning_msg = f"Processed {len(valid_spins)} valid spins. Invalid inputs ignored:\n- " + "\n- ".join(errors) + "\nUse integers 0-36."
+            gr.Warning(warning_msg)
+            logger.debug(f"validate_spins_input: Warning - {warning_msg}")
+
+        return spins_display_value, formatted_html
+
+    except Exception as e:
+        logger.error(
+            f"validate_spins_input: Unexpected error: {str(e)}\n{traceback.format_exc()}"
+        )
+        gr.Warning(
+            f"⚠️ Input validation error (spins preserved): "
+            f"{type(e).__name__}: {str(e)}"
+        )
+        safe_spins = ", ".join(str(s) for s in state.last_spins) if state.last_spins else (spins_input or "")
+        return safe_spins, f"<h4>Last Spins</h4><p>⚠️ Error processing input — please try again.</p>"
 
 # Line 1: Start of updated add_spin function
+def add_spin(number, current_spins, num_to_show):
+    start_time = time.time()
+
+    logger.debug(f"add_spin: Processing number='{number}', current_spins='{current_spins}', num_to_show={num_to_show}")
+    try:
+        numbers = [n.strip() for n in number.split(",") if n.strip()]
+        unique_numbers = list(dict.fromkeys(numbers))
+        
+        if not unique_numbers:
+            gr.Warning("No valid input provided. Please enter numbers between 0 and 36.")
+            logger.debug("add_spin: No valid numbers provided.")
+            return current_spins, current_spins, "<h4>Last Spins</h4><p>Error: No valid numbers provided.</p>", update_spin_counter(), render_sides_of_zero_display()
+        
+        current_spins_list = current_spins.split(", ") if current_spins and current_spins.strip() else []
+        if current_spins_list == [""]:
+            current_spins_list = []
+        
+        new_spins = current_spins_list + unique_numbers
+        new_spins_str = ", ".join(new_spins)
+
+        # CHANGED: Directly update the state history here so the counter reads the exact total before the UI updates.
+        # Removed the destructive validate_spins_input call that was wiping out the history array.
+        state.last_spins = new_spins
+
+        # --- NEW: Auto-Pilot Logic (The "Brain") ---
+        # Prioritize AIDEA JSON targets if a sequence is loaded
+        if state.aidea_phases and state.aidea_active_targets:
+            eval_targets = state.aidea_active_targets
+        else:
+            eval_targets = state.active_strategy_targets
+
+        # --- SNIPER HARDCODE OVERRIDE (Hottest Street/Corner) ---
+        if getattr(state, 'sniper_locked', False):
+            current_idx = next((i for i, p in enumerate(getattr(state, 'aidea_phases', [])) if p['id'] == getattr(state, 'aidea_current_id', None)), 0)
+            phase_num = current_idx + 1
+            # Use hottest street/corner from current scores
+            street_active = {k: v for k, v in state.street_scores.items() if v > 0}
+            corner_active = {k: v for k, v in state.corner_scores.items() if v > 0}
+            if phase_num <= 65:
+                if street_active:
+                    best_street = max(street_active, key=street_active.get)
+                    eval_targets = list(STREETS[best_street])
+                else:
+                    eval_targets = [1, 2, 3]
+            else:
+                if corner_active:
+                    best_corner = max(corner_active, key=corner_active.get)
+                    eval_targets = list(CORNERS[best_corner])
+                else:
+                    eval_targets = [1, 2, 4, 5]
+
+        if eval_targets and unique_numbers:
+            try:
+                latest_spin_int = int(unique_numbers[-1])
+            except (ValueError, TypeError):
+                logger.warning(f"add_spin: Cannot convert '{unique_numbers[-1]}' to int; skipping auto-pilot evaluation.")
+                latest_spin_int = None
+
+            if latest_spin_int is not None:
+                if latest_spin_int in eval_targets:
+                    state.aidea_last_result = "WIN"
+                    coverage = len(eval_targets)
+                    multiplier = (36 / coverage) - 1 if coverage > 0 else 0
+                    state.aidea_bankroll += multiplier 
+                else:
+                    state.aidea_last_result = "LOSS"
+                    state.aidea_bankroll -= 1 
+                    
+                logger.debug(f"AUTO-PILOT: Spin {latest_spin_int} vs Targets {eval_targets} -> {state.aidea_last_result}")
+
+        # --- LABOUCHERE SEQUENCE TRACKER INTEGRATION ---
+        # Runs independently of eval_targets so the sequence updates on every spin.
+        # Targets are resolved from pre-spin scores (correct betting behaviour —
+        # you decide what to back before the wheel spins).
+        if state.lab_active and state.lab_sequence and unique_numbers:
+            try:
+                lab_spin_int = int(unique_numbers[-1])
+            except (ValueError, TypeError):
+                lab_spin_int = None
+
+            if lab_spin_int is not None:
+                bet_calc = (state.lab_sequence[0] + state.lab_sequence[-1]
+                            if len(state.lab_sequence) > 1 else state.lab_sequence[0])
+
+                is_single_target = "1 Target" in state.lab_mode
+                total_risk = bet_calc if is_single_target else bet_calc * 2
+                profit_on_win = bet_calc
+
+                # Resolve which numbers count as a win for this spin.
+                # Prefer active strategy targets; fall back to score-based resolution.
+                lab_targets = (state.active_strategy_targets
+                               if state.active_strategy_targets
+                               else _resolve_lab_targets())
+
+                if lab_targets and lab_spin_int in lab_targets:
+                    # WIN — cancel first and last elements of the sequence.
+                    state.lab_bankroll += profit_on_win
+                    state.lab_sequence = (state.lab_sequence[1:-1]
+                                          if len(state.lab_sequence) >= 2 else [])
+                    if not state.lab_sequence:
+                        state.lab_status = "Complete: Profit Secured!"
+                        state.lab_active = False
+                else:
+                    # LOSS — append the risk to the sequence.
+                    state.lab_bankroll -= total_risk
+                    if state.lab_split_limit > 0 and total_risk >= state.lab_split_limit:
+                        half1 = round(total_risk / 2.0, 2)
+                        half2 = round(total_risk - half1, 2)
+                        state.lab_sequence.extend([half1, half2])
+                    else:
+                        state.lab_sequence.append(total_risk)
+        # -----------------------------------------------
+        if len(unique_numbers) < len(numbers):
+            duplicates = [n for n in numbers if numbers.count(n) > 1]
+            logger.debug(f"add_spin: Removed duplicates: {', '.join(set(duplicates))}")
+        
+        logger.debug(f"add_spin: Added {len(unique_numbers)} spins, new_spins_str='{new_spins_str}', time={time.time() - start_time:.3f}s")
+        
+        _update_drought_counters()
+        formatted_html = format_spins_as_html(new_spins_str, num_to_show)
+        autosave(state)
+        return new_spins_str, new_spins_str, formatted_html, update_spin_counter(), render_sides_of_zero_display()
+
+    except Exception as e:
+        logger.error(
+            f"add_spin: Unexpected error: {str(e)}\n{traceback.format_exc()}"
+        )
+        gr.Warning(
+            f"⚠️ Spin processing error (spins preserved): "
+            f"{type(e).__name__}: {str(e)}"
+        )
+        # Return last known state so the user can continue entering spins
+        safe_spins_str = ", ".join(str(s) for s in state.last_spins) if state.last_spins else (current_spins or "")
+        try:
+            safe_html = format_spins_as_html(safe_spins_str, num_to_show)
+        except Exception:
+            logger.error(f"add_spin: Failed to render fallback spins HTML\n{traceback.format_exc()}")
+            safe_html = "<h4>Last Spins</h4><p>⚠️ Error rendering spins — please enter another spin.</p>"
+        return safe_spins_str, safe_spins_str, safe_html, update_spin_counter(), render_sides_of_zero_display()
 
 
 def process_aidea_upload(file):
@@ -635,12 +1049,6 @@ def render_strategy_cards_area_html(*args):
         hud_filters=all_filters, return_cards_only=True
     )
 
-# Register rendering callbacks that depend on app-level functions defined above.
-_rendering.set_callbacks(
-    calculate_trending_fn=calculate_trending_sections,
-    render_cards_fn=render_strategy_cards_area_html,
-)
-
 def _resolve_lab_targets():
     """Resolve which roulette numbers count as a WIN for the current Labouchere session.
 
@@ -732,7 +1140,6 @@ def start_lab_session(base, target, mode, split_limit):
     )
     return _labouchere_update()
 
-
 def reset_lab_session(mode):
     """Reset the Labouchere session to idle/waiting state."""
     state.lab_active = False
@@ -748,13 +1155,640 @@ def reset_lab_session(mode):
     logger.debug(f"reset_lab_session: mode={state.lab_mode}")
     return _labouchere_update()
 
+def highlight_even_money(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight even money bets for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, None, {}
+    trending, second, third = None, None, None
+    number_highlights = {}
+    if strategy_name in ["Best Even Money Bets", "Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Columns + Best Even Money Bets + Top Pick 18 Numbers"]:
+        even_money_hits = [item for item in sorted_sections["even_money"] if item[1] > 0]
+        if even_money_hits:
+            trending = even_money_hits[0][0]
+            second = even_money_hits[1][0] if len(even_money_hits) > 1 else None
+            third = even_money_hits[2][0] if len(even_money_hits) > 2 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["even_money"][0][0] if sorted_sections["even_money"] else None
+        second = sorted_sections["even_money"][1][0] if len(sorted_sections["even_money"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_even_money = sorted(state.even_money_scores.items(), key=lambda x: x[1])
+        trending = sorted_even_money[0][0] if sorted_even_money else None
+        second = sorted_even_money[1][0] if len(sorted_even_money) > 1 else None
+    elif strategy_name in ["3-8-6 Rising Martingale", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, highlight only the top even money bet
+        trending = sorted_sections["even_money"][0][0] if sorted_sections["even_money"] else None
+    elif strategy_name == "Best Even Money Bet (Till the tie breaks, No Highlighting)":
+        sorted_em = sorted(state.even_money_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_em and sorted_em[0][1] > 0:
+            # Check if 1st place is strictly greater than 2nd place
+            if len(sorted_em) > 1 and sorted_em[0][1] > sorted_em[1][1]:
+                trending = sorted_em[0][0]
+            # If tied (sorted_em[0][1] == sorted_em[1][1]), trending remains None (No Highlight)
+    return trending, second, third, number_highlights
 
+def highlight_dozens(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight dozens for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, {}
+    trending, second = None, None
+    number_highlights = {}
+    if strategy_name in ["Best Dozens", "Best Dozens + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Dozens + Best Streets"]:
+        dozens_hits = [item for item in sorted_sections["dozens"] if item[1] > 0]
+        if dozens_hits:
+            trending = dozens_hits[0][0]
+            second = dozens_hits[1][0] if len(dozens_hits) > 1 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_dozens = sorted(state.dozen_scores.items(), key=lambda x: x[1])
+        trending = sorted_dozens[0][0] if sorted_dozens else None
+        second = sorted_dozens[1][0] if len(sorted_dozens) > 1 else None
+    elif strategy_name in ["Fibonacci Strategy", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, always highlight the top two dozens
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 else None
+    elif strategy_name == "1 Dozen +1 Column Strategy":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] and sorted_sections["dozens"][0][1] > 0 else None
+    elif strategy_name == "Best Single Dozen (Till the tie breaks, No Highlighting)":
+        sorted_d = sorted(state.dozen_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_d and sorted_d[0][1] > 0:
+            if len(sorted_d) > 1 and sorted_d[0][1] > sorted_d[1][1]:
+                trending = sorted_d[0][0]
+    elif strategy_name == "Romanowksy Missing Dozen":
+        trending = sorted_sections["dozens"][0][0] if sorted_sections["dozens"] and sorted_sections["dozens"][0][1] > 0 else None
+        second = sorted_sections["dozens"][1][0] if len(sorted_sections["dozens"]) > 1 and sorted_sections["dozens"][1][1] > 0 else None
+        weakest_dozen = min(state.dozen_scores.items(), key=lambda x: x[1], default=("1st Dozen", 0))[0]
+        straight_up_df = pd.DataFrame(list(state.scores.items()), columns=["Number", "Score"])
+        straight_up_df = straight_up_df[straight_up_df["Score"] > 0].sort_values(by="Score", ascending=False)
+        weak_numbers = [row["Number"] for _, row in straight_up_df.iterrows() if row["Number"] in DOZENS[weakest_dozen]][:8]
+        for num in weak_numbers:
+            number_highlights[str(num)] = top_color
+    return trending, second, number_highlights
 
+def highlight_columns(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight columns for relevant strategies."""
+    if sorted_sections is None:
+        return None, None, {}
+    trending, second = None, None
+    number_highlights = {}
+    if strategy_name in ["Best Columns", "Best Columns + Top Pick 18 Numbers", 
+                         "Best Columns + Best Even Money Bets + Top Pick 18 Numbers", 
+                         "Best Columns + Best Streets"]:
+        columns_hits = [item for item in sorted_sections["columns"] if item[1] > 0]
+        if columns_hits:
+            trending = columns_hits[0][0]
+            second = columns_hits[1][0] if len(columns_hits) > 1 else None
+    elif strategy_name == "Hot Bet Strategy":
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] else None
+        second = sorted_sections["columns"][1][0] if len(sorted_sections["columns"]) > 1 else None
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_columns = sorted(state.column_scores.items(), key=lambda x: x[1])
+        trending = sorted_columns[0][0] if sorted_columns else None
+        second = sorted_columns[1][0] if len(sorted_columns) > 1 else None
+    elif strategy_name in ["Fibonacci Strategy", "Fibonacci To Fortune"]:
+        # For Fibonacci To Fortune, always highlight the top two columns
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] else None
+        second = sorted_sections["columns"][1][0] if len(sorted_sections["columns"]) > 1 else None
+    elif strategy_name == "Best Column (Till the tie breaks, No Highlighting)":
+        sorted_c = sorted(state.column_scores.items(), key=lambda x: x[1], reverse=True)
+        if sorted_c and sorted_c[0][1] > 0:
+            if len(sorted_c) > 1 and sorted_c[0][1] > sorted_c[1][1]:
+                trending = sorted_c[0][0]
+    elif strategy_name == "1 Dozen +1 Column Strategy":
+        trending = sorted_sections["columns"][0][0] if sorted_sections["columns"] and sorted_sections["columns"][0][1] > 0 else None
+    return trending, second, number_highlights
 
+def highlight_numbers(strategy_name, sorted_sections, top_color, middle_color, lower_color, strong_numbers_count=18):
+    """Highlight straight-up numbers for relevant strategies, supporting dynamic counts from 1-34."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    straight_up_df = pd.DataFrame(list(state.scores.items()), columns=["Number", "Score"])
+    straight_up_df = straight_up_df[straight_up_df["Score"] > 0].sort_values(by="Score", ascending=False)
+    
+    # List of strategies that use the 'Top Pick' number highlighting
+    top_pick_strategies = [
+        "Top Pick 18 Numbers without Neighbours", 
+        "Best Even Money Bets + Top Pick 18 Numbers", 
+        "Best Dozens + Top Pick 18 Numbers", 
+        "Best Columns + Top Pick 18 Numbers", 
+        "Best Dozens + Best Even Money Bets + Top Pick 18 Numbers", 
+        "Best Columns + Best Even Money Bets + Top Pick 18 Numbers"
+    ]
 
+    if strategy_name in top_pick_strategies:
+        # Get the count from the slider (passed via strong_numbers_count)
+        # We cap it at 34 as requested
+        count = max(1, min(int(strong_numbers_count), 34))
+        
+        if not straight_up_df.empty:
+            # Take the top N numbers based on score
+            top_n_numbers = straight_up_df["Number"].head(count).tolist()
+            
+            # Divide the count into 3 tiers for coloring
+            tier_size = count // 3
+            remainder = count % 3
+            
+            # First tier gets the remainder
+            size1 = tier_size + remainder
+            size2 = tier_size
+            
+            for i, num in enumerate(top_n_numbers):
+                if i < size1: color = top_color
+                elif i < (size1 + size2): color = middle_color
+                else: color = lower_color
+                number_highlights[str(num)] = color
 
+            # --- GHOST PREDICTOR LOGIC ---
+            # Identify the NEXT 3 strongest numbers that didn't make the primary cut
+            ghost_picks = straight_up_df["Number"].iloc[count:count+3].tolist()
+            for ghost_num in ghost_picks:
+                # Use semi-transparent white to trigger the dashed border CSS
+                number_highlights[str(ghost_num)] = "rgba(255, 255, 255, 0.2)"
+                
+    elif strategy_name == "Top Numbers with Neighbours (Tiered)":
+        num_to_take = min(8, len(straight_up_df))
+        top_numbers = set(straight_up_df["Number"].head(num_to_take).tolist())
+        number_groups = []
+        for num in top_numbers:
+            left, right = current_neighbors.get(num, (None, None))
+            group = [num]
+            if left is not None:
+                group.append(left)
+            if right is not None:
+                group.append(right)
+            number_groups.append((state.scores[num], group))
+        number_groups.sort(key=lambda x: x[0], reverse=True)
+        ordered_numbers = []
+        for _, group in number_groups:
+            ordered_numbers.extend(group)
+        ordered_numbers = ordered_numbers[:24]
+        for i, num in enumerate(ordered_numbers):
+            color = top_color if i < 8 else (middle_color if i < 16 else lower_color)
+            number_highlights[str(num)] = color
+    return number_highlights
+
+def highlight_other_bets(strategy_name, sorted_sections, top_color, middle_color, lower_color):
+    """Highlight streets, corners, splits, and double streets for relevant strategies."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    
+    if strategy_name == "Hot Bet Strategy":
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (split_name, _) in enumerate(sorted_sections["splits"][:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Cold Bet Strategy":
+        sorted_streets = sorted(state.street_scores.items(), key=lambda x: x[1])
+        sorted_corners = sorted(state.corner_scores.items(), key=lambda x: x[1])
+        sorted_splits = sorted(state.split_scores.items(), key=lambda x: x[1])
+        for i, (street_name, _) in enumerate(sorted_streets[:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (corner_name, _) in enumerate(sorted_corners[:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        for i, (split_name, _) in enumerate(sorted_splits[:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Streets":
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name in ["Best Dozens + Best Streets", "Best Columns + Best Streets"]:
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:9]):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Double Streets":
+        for i, (six_line_name, _) in enumerate(sorted_sections["six_lines"][:9]):
+            numbers = SIX_LINES[six_line_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Corners":
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:9]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Sniper: Best Street + Corner":
+        # Highlight top 3 streets (yellow, cyan, green) + top 3 corners
+        # Streets get priority on overlapping numbers
+        for i, (corner_name, _) in enumerate(sorted_sections["corners"][:3]):
+            numbers = CORNERS[corner_name]
+            color = top_color if i == 0 else (middle_color if i == 1 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+        # Streets painted on top so they take visual priority
+        for i, (street_name, _) in enumerate(sorted_sections["streets"][:3]):
+            numbers = STREETS[street_name]
+            color = top_color if i == 0 else (middle_color if i == 1 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Best Splits":
+        for i, (split_name, _) in enumerate(sorted_sections["splits"][:9]):
+            numbers = SPLITS[split_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Non-Overlapping Double Street Strategy":
+        non_overlapping_sets = [
+            ["1ST D.STREET – 1, 4", "3RD D.STREET – 7, 10", "5TH D.STREET – 13, 16", "7TH D.STREET – 19, 22", "9TH D.STREET – 25, 28"],
+            ["2ND D.STREET – 4, 7", "4TH D.STREET – 10, 13", "6TH D.STREET – 16, 19", "8TH D.STREET – 22, 25", "10TH D.STREET – 28, 31"]
+        ]
+        set_scores = []
+        for idx, non_overlapping_set in enumerate(non_overlapping_sets):
+            total_score = sum(state.six_line_scores.get(name, 0) for name in non_overlapping_set)
+            set_scores.append((idx, total_score, non_overlapping_set))
+        best_set = max(set_scores, key=lambda x: x[1], default=(0, 0, non_overlapping_sets[0]))
+        sorted_best_set = sorted(best_set[2], key=lambda name: state.six_line_scores.get(name, 0), reverse=True)[:9]
+        for i, double_street_name in enumerate(sorted_best_set):
+            numbers = SIX_LINES[double_street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Non-Overlapping Corner Strategy":
+        sorted_corners = sorted(state.corner_scores.items(), key=lambda x: x[1], reverse=True)
+        selected_corners = []
+        selected_numbers = set()
+        for corner_name, _ in sorted_corners:
+            if len(selected_corners) >= 9:
+                break
+            corner_numbers = set(CORNERS[corner_name])
+            if not corner_numbers & selected_numbers:
+                selected_corners.append(corner_name)
+                selected_numbers.update(corner_numbers)
+        for i, corner_name in enumerate(selected_corners):
+            numbers = CORNERS[corner_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "3-8-6 Rising Martingale":
+        top_streets = sorted_sections["streets"][:8]
+        for i, (street_name, _) in enumerate(top_streets):
+            numbers = STREETS[street_name]
+            color = top_color if i < 3 else (middle_color if 3 <= i < 6 else lower_color)
+            for num in numbers:
+                number_highlights[str(num)] = color
+    elif strategy_name == "Fibonacci To Fortune":
+        # Highlight the best double street in the weakest dozen, excluding numbers from the top two dozens
+        sorted_dozens = sorted(state.dozen_scores.items(), key=lambda x: x[1], reverse=True)
+        weakest_dozen = min(state.dozen_scores.items(), key=lambda x: x[1], default=("1st Dozen", 0))[0]
+        top_two_dozens = [item[0] for item in sorted_dozens[:2]]
+        top_two_dozen_numbers = set()
+        for dozen_name in top_two_dozens:
+            top_two_dozen_numbers.update(DOZENS[dozen_name])
+        double_streets_in_weakest = [
+            (name, state.six_line_scores.get(name, 0))
+            for name, numbers in SIX_LINES.items()
+            if set(numbers).issubset(DOZENS[weakest_dozen]) and not set(numbers).intersection(top_two_dozen_numbers)
+        ]
+        if double_streets_in_weakest:
+            top_double_street = max(double_streets_in_weakest, key=lambda x: x[1])[0]
+            for num in SIX_LINES[top_double_street]:
+                number_highlights[str(num)] = top_color
+    return number_highlights
+
+def highlight_neighbors(strategy_name, sorted_sections, neighbours_count, strong_numbers_count, top_color, middle_color):
+    """Highlight neighbors for the Neighbours of Strong Number strategy."""
+    if sorted_sections is None:
+        return {}
+    number_highlights = {}
+    if strategy_name == "Neighbours of Strong Number":
+        sorted_numbers = sorted(state.scores.items(), key=lambda x: (-x[1], x[0]))
+        numbers_hits = [item for item in sorted_numbers if item[1] > 0]
+        if numbers_hits:
+            strong_numbers_count = min(strong_numbers_count, len(numbers_hits))
+            top_numbers = set(item[0] for item in numbers_hits[:strong_numbers_count])
+            neighbors_set = set()
+            for strong_number in top_numbers:
+                current_number = strong_number
+                for _ in range(neighbours_count):
+                    left, _ = current_neighbors.get(current_number, (None, None))
+                    if left is not None:
+                        neighbors_set.add(left)
+                        current_number = left
+                    else:
+                        break
+                current_number = strong_number
+                for _ in range(neighbours_count):
+                    _, right = current_neighbors.get(current_number, (None, None))
+                    if right is not None:
+                        neighbors_set.add(right)
+                        current_number = right
+                    else:
+                        break
+            neighbors_set = neighbors_set - top_numbers
+            for num in top_numbers:
+                number_highlights[str(num)] = top_color
+            for num in neighbors_set:
+                number_highlights[str(num)] = middle_color
+    return number_highlights
 # Apply strategy highlights with neighbor highlights
+def apply_strategy_highlights(strategy_name, neighbours_count, strong_numbers_count, sorted_sections, top_color=None, middle_color=None, lower_color=None, suggestions=None):
+    """Apply highlights based on the selected strategy with custom colors, passing suggestions for outside bets."""
+    if sorted_sections is None:
+        return None, None, None, None, None, None, None, {}, "white", "white", "white", None
 
+    # Set default colors unless overridden
+    if strategy_name == "Cold Bet Strategy":
+        top_color = "#D3D3D3"  # Light Gray (Cold Top)
+        middle_color = "#DDA0DD"  # Plum (Cold Middle)
+        lower_color = "#E0FFFF"  # Light Cyan (Cold Lower)
+    else:
+        top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"  # Yellow
+        middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"  # Cyan
+        lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"  # Green
+
+    # Initialize highlight variables
+    trending_even_money, second_even_money, third_even_money = None, None, None
+    trending_dozen, second_dozen = None, None
+    trending_column, second_column = None, None
+    number_highlights = {}
+
+    # Apply highlights based on strategy
+    if strategy_name and strategy_name in STRATEGIES:
+        strategy_info = STRATEGIES[strategy_name]
+        if strategy_name == "Neighbours of Strong Number":
+            result = strategy_info["function"](neighbours_count, strong_numbers_count)
+            # Handle the tuple return value
+            if isinstance(result, tuple) and len(result) == 2:
+                recommendations, strategy_suggestions = result
+                suggestions = suggestions if suggestions is not None else strategy_suggestions
+            else:
+                # Fallback in case the function doesn't return the expected tuple
+                recommendations = result
+                suggestions = None
+        else:
+            # Other strategies return a single string
+            recommendations = strategy_info["function"]()
+            suggestions = None
+        
+        # Delegate to helper functions
+        em_trending, em_second, em_third, em_highlights = highlight_even_money(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        dz_trending, dz_second, dz_highlights = highlight_dozens(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        col_trending, col_second, col_highlights = highlight_columns(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+        num_highlights = highlight_numbers(strategy_name, sorted_sections, top_color, middle_color, lower_color, strong_numbers_count)
+        neighbor_highlights = highlight_neighbors(strategy_name, sorted_sections, neighbours_count, strong_numbers_count, top_color, middle_color)
+        other_highlights = highlight_other_bets(strategy_name, sorted_sections, top_color, middle_color, lower_color)
+
+        # Combine highlights
+        trending_even_money = em_trending
+        second_even_money = em_second
+        third_even_money = em_third
+        trending_dozen = dz_trending
+        second_dozen = dz_second
+        trending_column = col_trending
+        second_column = col_second
+        number_highlights.update(em_highlights)
+        number_highlights.update(dz_highlights)
+        number_highlights.update(col_highlights)
+        number_highlights.update(num_highlights)
+        number_highlights.update(neighbor_highlights)
+        number_highlights.update(other_highlights)
+
+    # Dozen Tracker Logic (When No Strategy is Selected)
+    if strategy_name == "None":
+        recent_spins = state.last_spins[-neighbours_count:] if len(state.last_spins) >= neighbours_count else state.last_spins
+        dozen_counts = {"1st Dozen": 0, "2nd Dozen": 0, "3rd Dozen": 0}
+        for spin in recent_spins:
+            spin_value = int(spin)
+            if spin_value != 0:
+                for name, numbers in DOZENS.items():
+                    if spin_value in numbers:
+                        dozen_counts[name] += 1
+                        break
+        sorted_dozens = sorted(dozen_counts.items(), key=lambda x: x[1], reverse=True)
+        if sorted_dozens[0][1] > 0:
+            trending_dozen = sorted_dozens[0][0]
+        if sorted_dozens[1][1] > 0:
+            second_dozen = sorted_dozens[1][0]
+
+    return trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions
+
+def render_dynamic_table_html(trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions=None, hot_numbers=None, scores=None):
+    """Generate HTML for the dynamic roulette table with improved visual clarity."""
+    # Safety check for empty data
+    if all(v is None for v in [trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column]) and not number_highlights and not suggestions:
+        return "<p>Please analyze some spins first to see highlights on the dynamic table.</p>"
+
+    # Define casino winners
+    casino_winners = {"hot_numbers": set(), "cold_numbers": set(), "even_money": set(), "dozens": set(), "columns": set()}
+    if state.use_casino_winners:
+        casino_winners["hot_numbers"] = set(state.casino_data["hot_numbers"].keys())
+        casino_winners["cold_numbers"] = set(state.casino_data["cold_numbers"].keys())
+        if any(state.casino_data["even_odd"].values()):
+            casino_winners["even_money"].add(max(state.casino_data["even_odd"], key=state.casino_data["even_odd"].get))
+        if any(state.casino_data["red_black"].values()):
+            casino_winners["even_money"].add(max(state.casino_data["red_black"], key=state.casino_data["red_black"].get))
+        if any(state.casino_data["low_high"].values()):
+            casino_winners["even_money"].add(max(state.casino_data["low_high"], key=state.casino_data["low_high"].get))
+        if any(state.casino_data["dozens"].values()):
+            casino_winners["dozens"] = {max(state.casino_data["dozens"], key=state.casino_data["dozens"].get)}
+        if any(state.casino_data["columns"].values()):
+            casino_winners["columns"] = {max(state.casino_data["columns"], key=state.casino_data["columns"].get)}
+
+    # Initialize suggestion highlights
+    suggestion_highlights = {}
+    if suggestions:
+        best_even_money = None
+        best_bet = None
+        play_two_first = None
+        play_two_second = None
+
+        for key, value in suggestions.items():
+            if key == "best_even_money" and "(Tied with" not in value:
+                best_even_money = value.split(":")[0].strip()
+            elif key == "best_bet" and "(Tied with" not in value:
+                best_bet = value.split(":")[0].strip()
+            elif key == "play_two" and "(Tied with" not in value:
+                parts = value.split(":", 1)[1].split(" and ")
+                if len(parts) >= 2:
+                    play_two_first = parts[0].split("(")[0].strip()
+                    play_two_second = parts[1].split("(")[0].strip()
+
+        if best_even_money:
+            suggestion_highlights[best_even_money] = top_color
+        if best_bet:
+            suggestion_highlights[best_bet] = top_color
+        if play_two_first and play_two_second:
+            if best_bet and play_two_first == best_bet:
+                suggestion_highlights[play_two_first] = top_color
+            else:
+                suggestion_highlights[play_two_first] = top_color
+            suggestion_highlights[play_two_second] = lower_color
+
+    table_layout = [
+        ["", "3", "6", "9", "12", "15", "18", "21", "24", "27", "30", "33", "36"],
+        ["0", "2", "5", "8", "11", "14", "17", "20", "23", "26", "29", "32", "35"],
+        ["", "1", "4", "7", "10", "13", "16", "19", "22", "25", "28", "31", "34"]
+    ]
+
+    html = '<table class="large-table dynamic-roulette-table" border="1" style="border-collapse: collapse; text-align: center; font-size: 14px; font-family: Arial, sans-serif; border-color: black; table-layout: fixed; width: 100%; max-width: 600px;">'
+    html += '<colgroup><col style="width: 40px;">'
+    for _ in range(12):
+        html += '<col style="width: 40px;">'
+    html += '<col style="width: 80px;"></colgroup>'
+
+    hot_numbers = set(hot_numbers) if hot_numbers else set()
+    scores = scores if scores is not None else {}
+
+    for row_idx, row in enumerate(table_layout):
+        html += "<tr>"
+        for num in row:
+            if num == "":
+                html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+            else:
+                base_color = colors.get(num, "black")
+                highlight_color = number_highlights.get(num, base_color)
+                
+                border_style = "3px solid black"
+                if num in casino_winners["hot_numbers"]:
+                    border_style = "3px solid #FFD700"
+                elif num in casino_winners["cold_numbers"]:
+                    border_style = "3px solid #C0C0C0"
+                
+                text_style = "color: white; font-weight: bold; text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);"
+                cell_class = "hot-number has-tooltip" if num in hot_numbers else "has-tooltip"
+                hit_count = scores.get(num, scores.get(int(num), 0) if num.isdigit() else 0)
+                tooltip = f"Hit {hit_count} times"
+                html += f'<td style="height: 40px; background-color: {highlight_color}; {text_style} border: {border_style}; padding: 0; vertical-align: middle; box-sizing: border-box; text-align: center;" class="{cell_class}" data-tooltip="{tooltip}">{num}</td>'
+        
+        # Add Columns Logic
+        if row_idx == 0:
+            col_name = "3rd Column"
+        elif row_idx == 1:
+            col_name = "2nd Column"
+        elif row_idx == 2:
+            col_name = "1st Column"
+        
+        bg_color = suggestion_highlights.get(col_name, top_color if trending_column == col_name else (middle_color if second_column == col_name else "white"))
+        border_style = "3px dashed #FFD700" if col_name in casino_winners["columns"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        col_score = state.column_scores.get(col_name, 0)
+        max_col_score = max(state.column_scores.values(), default=1) or 1
+        fill_percentage = (col_score / max_col_score) * 100
+        html += f'<td style="background-color: {bg_color}; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{col_name}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+        html += "</tr>"
+
+    # Row for Low/High
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    for name, label in [("Low", "Low (1 to 18)"), ("High", "High (19 to 36)")]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_even_money == name else (middle_color if second_even_money == name else (lower_color if third_even_money == name else "white")))
+        border_style = "3px dashed #FFD700" if name in casino_winners["even_money"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = state.even_money_scores.get(name, 0)
+        max_score = max(state.even_money_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td colspan="6" style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{label}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    # Row for Dozens
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    for name in ["1st Dozen", "2nd Dozen", "3rd Dozen"]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_dozen == name else (middle_color if second_dozen == name else "white"))
+        border_style = "3px dashed #FFD700" if name in casino_winners["dozens"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = state.dozen_scores.get(name, 0)
+        max_score = max(state.dozen_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td colspan="4" style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{name}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    # Row for Even Money
+    html += "<tr>"
+    html += '<td style="height: 40px; border-color: black; box-sizing: border-box;"></td>'
+    html += '<td colspan="4" style="border-color: black; box-sizing: border-box;"></td>'
+    for name, label in [("Odd", "ODD"), ("Red", "RED"), ("Black", "BLACK"), ("Even", "EVEN")]:
+        bg_color = suggestion_highlights.get(name, top_color if trending_even_money == name else (middle_color if second_even_money == name else (lower_color if third_even_money == name else "white")))
+        border_style = "3px dashed #FFD700" if name in casino_winners["even_money"] else "1px solid black"
+        tier_class = "top-tier" if bg_color == top_color else "middle-tier" if bg_color == middle_color else "lower-tier" if bg_color == lower_color else ""
+        score = state.even_money_scores.get(name, 0)
+        max_score = max(state.even_money_scores.values(), default=1) or 1
+        fill_percentage = (score / max_score) * 100
+        html += f'<td style="background-color: {bg_color}; color: black; border: {border_style}; padding: 0; font-size: 10px; vertical-align: middle; box-sizing: border-box; height: 40px; text-align: center;" class="{tier_class}"><span>{label}</span><div class="progress-bar"><div class="progress-fill {tier_class}" style="width: {fill_percentage}%;"></div></div></td>'
+    html += '<td colspan="4" style="border-color: black; box-sizing: border-box;"></td>'
+    html += '<td style="border-color: black; box-sizing: border-box;"></td>'
+    html += "</tr>"
+
+    html += "</table>"
+
+    # --- STRATEGY RECOMMENDATIONS: Best Street & Best Corner ---
+    street_scores_active = {k: v for k, v in state.street_scores.items() if v > 0}
+    corner_scores_active = {k: v for k, v in state.corner_scores.items() if v > 0}
+
+    if street_scores_active or corner_scores_active:
+        html += '<div style="margin-top: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px;">'
+        html += '<div style="font-size: 13px; font-weight: 900; color: #ff00ff; text-transform: uppercase; margin-bottom: 10px; text-align: center; letter-spacing: 1px;">Strategy Recommendations</div>'
+
+        if street_scores_active:
+            sorted_st = sorted(street_scores_active.items(), key=lambda x: x[1], reverse=True)[:5]
+            html += '<div style="margin-bottom: 10px;">'
+            html += '<div style="font-size: 11px; color: #00BFFF; font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #1e3a5f; padding-bottom: 3px;">BEST STREETS (11:1)</div>'
+            for i, (sname, shits) in enumerate(sorted_st):
+                s_short = sname.split(" – ")[0] if " – " in sname else sname
+                s_nums = sorted(STREETS[sname])
+                is_top = (i == 0)
+                bg = "rgba(0, 191, 255, 0.12)" if is_top else "transparent"
+                border = "1px solid #00BFFF" if is_top else "1px solid #1e293b"
+                html += f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: {bg}; border: {border}; border-radius: 4px; margin-bottom: 3px;">'
+                html += f'<span style="color: {"#00BFFF" if is_top else "#64748b"}; font-weight: {"900" if is_top else "normal"}; font-size: 12px;">{"→ " if is_top else ""}{s_short}</span>'
+                html += f'<span style="color: #94a3b8; font-size: 11px;">[{", ".join(str(n) for n in s_nums)}]</span>'
+                html += f'<span style="color: {"#4ade80" if is_top else "#64748b"}; font-weight: bold; font-size: 12px;">{shits}x</span>'
+                html += '</div>'
+            html += '</div>'
+
+        if corner_scores_active:
+            sorted_co = sorted(corner_scores_active.items(), key=lambda x: x[1], reverse=True)[:5]
+            html += '<div>'
+            html += '<div style="font-size: 11px; color: #FFD700; font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid #5a4500; padding-bottom: 3px;">BEST CORNERS (8:1)</div>'
+            for i, (cname, chits) in enumerate(sorted_co):
+                c_short = cname.split(" – ")[0] if " – " in cname else cname
+                c_nums_display = cname.split(" – ")[1] if " – " in cname else ""
+                is_top = (i == 0)
+                bg = "rgba(255, 215, 0, 0.12)" if is_top else "transparent"
+                border = "1px solid #FFD700" if is_top else "1px solid #1e293b"
+                html += f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: {bg}; border: {border}; border-radius: 4px; margin-bottom: 3px;">'
+                html += f'<span style="color: {"#FFD700" if is_top else "#64748b"}; font-weight: {"900" if is_top else "normal"}; font-size: 12px;">{"→ " if is_top else ""}{c_short}</span>'
+                html += f'<span style="color: #94a3b8; font-size: 11px;">[{c_nums_display}]</span>'
+                html += f'<span style="color: {"#4ade80" if is_top else "#64748b"}; font-weight: bold; font-size: 12px;">{chits}x</span>'
+                html += '</div>'
+            html += '</div>'
+
+        html += '</div>'
+
+    return html
 
 def update_casino_data(spins_count, even_percent, odd_percent, red_percent, black_percent, low_percent, high_percent, dozen1_percent, dozen2_percent, dozen3_percent, col1_percent, col2_percent, col3_percent, use_winners):
     """Parse casino data inputs, update state, and generate HTML output."""
@@ -869,11 +1903,231 @@ def reset_casino_data():
     )
 
 # Line 1: Start of create_dynamic_table function (updated)
+def create_dynamic_table(strategy_name=None, neighbours_count=2, strong_numbers_count=1, dozen_tracker_spins=5, top_color=None, middle_color=None, lower_color=None, tracked_tiers=None):
+    try:
+        # Default tracked tiers if None
+        if tracked_tiers is None: tracked_tiers = ["Yellow (Top)", "Cyan (Middle)"]
+
+        # Ensure Colors are Resolved (Defaulting if None)
+        top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"
+        middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"
+        lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"
+
+        logger.debug(f"create_dynamic_table called with strategy: {strategy_name}, neighbours_count: {neighbours_count}, tracked_tiers: {tracked_tiers}")
+        
+        logger.debug("create_dynamic_table: Calculating trending sections")
+        sorted_sections = calculate_trending_sections()
+        logger.debug(f"create_dynamic_table: sorted_sections={sorted_sections}")
+        
+        # If no spins yet, initialize with default even money focus
+        if sorted_sections is None and strategy_name == "Best Even Money Bets":
+            logger.debug("create_dynamic_table: No spins yet, using default even money focus")
+            trending_even_money = "Red"  # Default to "Red" as an example
+            second_even_money = "Black"
+            third_even_money = "Even"
+            trending_dozen = None
+            second_dozen = None
+            trending_column = None
+            second_column = None
+            number_highlights = {}
+            top_color = top_color if top_color else "rgba(255, 255, 0, 0.5)"
+            middle_color = middle_color if middle_color else "rgba(0, 255, 255, 0.5)"
+            lower_color = lower_color if lower_color else "rgba(0, 255, 0, 0.5)"
+            suggestions = None
+            hot_numbers = []  # No hot numbers without spins
+        else:
+            logger.debug("create_dynamic_table: Applying strategy highlights")
+            trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions = apply_strategy_highlights(strategy_name, int(dozen_tracker_spins) if strategy_name == "None" else neighbours_count, strong_numbers_count, sorted_sections, top_color, middle_color, lower_color)
+            
+            # --- FIX: TRANSLATE VISUAL HIGHLIGHTS TO DATA FOR AUTO-PILOT ---
+            # Strict Logic: Only numbers belonging to the CHECKED color tiers are valid targets.
+            # If a tier is UNCHECKED, its numbers are NOT added, effectively treating them as "Losses" 
+            # (unless they overlap with a Checked tier).
+            active_targets = set()
+            
+            # Helper to check if a specific color string matches the user's "Yellow/Cyan/Green" selection
+            # We compare the RGBA strings directly.
+            def is_color_tracked(color_val):
+                if color_val == top_color and "Yellow (Top)" in tracked_tiers: return True
+                if color_val == middle_color and "Cyan (Middle)" in tracked_tiers: return True
+                if color_val == lower_color and "Green (Lower)" in tracked_tiers: return True
+                return False
+
+            # 1. Collect straight-up numbers (e.g. from Number Strategies)
+            if number_highlights:
+                for num_str, color in number_highlights.items():
+                    if num_str.isdigit():
+                        if is_color_tracked(color):
+                            active_targets.add(int(num_str))
+            
+            # 2. Collect numbers from Section Highlights (Even Money)
+            # Only add if the SECTION's color matches a CHECKED tier.
+            # Even Money Logic:
+            em_map = {
+                trending_even_money: top_color,
+                second_even_money: middle_color,
+                third_even_money: lower_color
+            }
+            for em_name, em_color in em_map.items():
+                if em_name and em_name in EVEN_MONEY and is_color_tracked(em_color):
+                    active_targets.update(EVEN_MONEY[em_name])
+
+            # 3. Collect numbers from Section Highlights (Dozens)
+            # Dozen Logic:
+            dz_map = {
+                trending_dozen: top_color,
+                second_dozen: middle_color
+            }
+            for dz_name, dz_color in dz_map.items():
+                if dz_name and dz_name in DOZENS and is_color_tracked(dz_color):
+                    active_targets.update(DOZENS[dz_name])
+            
+            # 4. Collect numbers from Section Highlights (Columns)
+            # Column Logic:
+            col_map = {
+                trending_column: top_color,
+                second_column: middle_color
+            }
+            for col_name, col_color in col_map.items():
+                if col_name and col_name in COLUMNS and is_color_tracked(col_color):
+                    active_targets.update(COLUMNS[col_name])
+
+            # 5. Save to global state for the Auto-Pilot to read
+            state.active_strategy_targets = sorted(list(active_targets))
+            logger.debug(f"DEBUG: Auto-Pilot Targets Updated ({tracked_tiers}): {len(state.active_strategy_targets)} numbers covered")
+            # ---------------------------------------------------------------
+
+            logger.debug(f"create_dynamic_table: Strategy highlights applied - trending_even_money={trending_even_money}, second_even_money={second_even_money}, third_even_money={third_even_money}, trending_dozen={trending_dozen}, second_dozen={second_dozen}, trending_column={trending_column}, second_column={second_column}, number_highlights={number_highlights}")
+            
+            # Determine hot numbers (top 5 with hits)
+            sorted_scores = sorted(state.scores.items(), key=lambda x: x[1], reverse=True)
+            hot_numbers = [str(num) for num, score in sorted_scores[:5] if score > 0]
+            logger.debug(f"create_dynamic_table: Hot numbers={hot_numbers}, Scores={dict(state.scores)}")
+        
+        # If still no highlights and no sorted_sections, provide a default message
+        if sorted_sections is None and not any([trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights]):
+            logger.debug("create_dynamic_table: No spins and no highlights, returning default message")
+            return "<p>No spins yet. Select a strategy to see default highlights.</p>"
+        
+        logger.debug("create_dynamic_table: Rendering dynamic table HTML")
+        html = render_dynamic_table_html(trending_even_money, second_even_money, third_even_money, trending_dozen, second_dozen, trending_column, second_column, number_highlights, top_color, middle_color, lower_color, suggestions, hot_numbers, scores=state.scores)
+        logger.debug("create_dynamic_table: Table generated successfully")
+        return html
+    
+    except Exception as e:
+        logger.error(f"create_dynamic_table: Error: {str(e)}\n{traceback.format_exc()}")
+        return "<div style='color:#ef4444;padding:8px;'>⚠️ Table rendering error — spins are preserved.</div>"
     
 # Function to reset scores (no longer needed, but kept for compatibility)
+def reset_scores():
+    state.reset()
+    return "Scores reset!"
 
+def clear_all():
+    state.selected_numbers.clear()
+    state.last_spins = []
+    
+    # Hard reset Labouchere & AIDEA memory safely
+    state.lab_active = False
+    state.lab_sequence = []
+    state.lab_status = "Waiting to Start"
+    state.lab_bankroll = 0.0
+    state.aidea_bankroll = 0.0
+    state.aidea_last_result = None
+    state.aidea_phase_repeats = {}
+    
+    state.sniper_locked = False
+    state.sniper_locked_misses = 0
+    
+    # --- Reset Non-Repeater Memory ---
+    state.current_non_repeaters.clear()
+    state.previous_non_repeaters.clear()
+    state.nr_last_spin_count = 0
+    if hasattr(state, 'nr_mem_in'): state.nr_mem_in = []
+    if hasattr(state, 'nr_mem_out'): state.nr_mem_out = []
+    if hasattr(state, 'nr_mem_spin_in'): state.nr_mem_spin_in = 0
+    if hasattr(state, 'nr_mem_spin_out'): state.nr_mem_spin_out = 0
+    
+    state.reset()
+    ts = int(time.time() * 1000)
+    js_clear = f'<script id="pin-clear-{ts}">localStorage.setItem("wp_rank_pins_v3","[]"); localStorage.setItem("wp_num_pins_v3","[]"); if(typeof fastUpdateWatchlist==="function") fastUpdateWatchlist();</script>'
+    return "", "", "All spins and scores cleared successfully!", "<h4>Last Spins</h4><p>No spins yet.</p>", "", "", "", "", "", "", "", "", "", "", "", update_spin_counter(), render_sides_of_zero_display(), js_clear
 
+def master_reset():
+    """Full app reset — clears spins, scores, pins, Labouchere, AIDEA, and all watchlists."""
+    state.selected_numbers.clear()
+    state.last_spins = []
+    state.spin_history = []
+    state.side_scores = {"Left Side of Zero": 0, "Right Side of Zero": 0}
+    state.scores = {n: 0 for n in range(37)}
+    state.pinned_numbers = set()
+    state.analysis_cache = {}
+    state.current_top_picks = []
+    state.previous_top_picks = []
+    state.stability_counter = 0
 
+    # Reset Labouchere
+    state.lab_active = False
+    state.lab_sequence = []
+    state.lab_status = "Waiting to Start"
+    state.lab_bankroll = 0.0
+
+    # Reset AIDEA
+    state.aidea_bankroll = 0.0
+    state.aidea_last_result = None
+    state.aidea_phase_repeats = {}
+    state.aidea_phases = []
+    state.aidea_rules = {}
+    state.aidea_current_id = None
+    state.aidea_completed_ids = set()
+    state.aidea_active_targets = []
+    state.active_strategy_targets = []
+
+    # Reset Sniper & D17
+    state.sniper_locked = False
+    state.sniper_locked_misses = 0
+    state.d17_list = []
+    state.d17_locked = False
+
+    # Reset Grind/Ramp
+    state.grind_step_index = 0
+    state.grind_last_spin_count = 0
+    state.ramp_step_index = 0
+    state.ramp_last_spin_count = 0
+    
+    # --- Reset Non-Repeater Memory ---
+    state.current_non_repeaters.clear()
+    state.previous_non_repeaters.clear()
+    state.nr_last_spin_count = 0
+    if hasattr(state, 'nr_mem_in'): state.nr_mem_in = []
+    if hasattr(state, 'nr_mem_out'): state.nr_mem_out = []
+    if hasattr(state, 'nr_mem_spin_in'): state.nr_mem_spin_in = 0
+    if hasattr(state, 'nr_mem_spin_out'): state.nr_mem_spin_out = 0
+
+    state.reset()
+
+    js_full_reset = """<script>
+        localStorage.setItem('wp_rank_pins_v3', '[]');
+        localStorage.setItem('wp_num_pins_v3', '[]');
+        if (typeof fastUpdateWatchlist === 'function') fastUpdateWatchlist();
+        console.log('Master Reset: All pins and watchlists cleared.');
+    </script>"""
+
+    return (
+        "", "",                                                              # spins_display, spins_textbox
+        "✅ Master Reset Complete! App is ready for a new session.",     # spin_analysis_output
+        "<h4>Last Spins</h4><p>No spins yet.</p>",                       # last_spin_display
+        "", "", "", "", "", "", "", "", "", "", "",                      # all analysis outputs
+        update_spin_counter(),                                           # spin_counter
+        render_sides_of_zero_display(),                                  # sides_of_zero_display
+        js_full_reset                                                    # js trigger
+    )
+
+def reset_strategy_dropdowns():
+    default_category = "Even Money Strategies"
+    default_strategy = "Best Even Money Bets"
+    strategy_choices = strategy_categories[default_category]
+    return default_category, default_strategy, strategy_choices
 
 def create_color_code_table():
     html = '''
@@ -945,10 +2199,76 @@ def create_color_code_table():
     '''
     return html
     
+def update_spin_counter():
+    """Update the spin counter HTML with total spins and phase indicator."""
+    try:
+        current_list = getattr(state, 'last_spins', [])
+        total_spins = len(current_list)
+    except Exception:
+        total_spins = 0
+
+    if total_spins <= 20:
+        phase_label = "EARLY"
+        phase_color = "#1565c0"
+        phase_bg    = "linear-gradient(135deg,#1565c0,#1976d2)"
+        phase_icon  = "🔵"
+        phase_tip   = "Gathering data"
+    elif total_spins <= 50:
+        phase_label = "MID"
+        phase_color = "#e65100"
+        phase_bg    = "linear-gradient(135deg,#e65100,#f57c00)"
+        phase_icon  = "🟠"
+        phase_tip   = "Patterns forming"
+    else:
+        phase_label = "DEEP"
+        phase_color = "#b71c1c"
+        phase_bg    = "linear-gradient(135deg,#b71c1c,#d32f2f)"
+        phase_icon  = "🔴"
+        phase_tip   = "Full analysis ready"
+
+    return (
+        f'<div style="display:flex;justify-content:center;align-items:center;width:100%;">'
+        f'<div style="display:inline-flex;align-items:center;gap:8px;'
+        f'background:{phase_bg};border-radius:20px;padding:6px 20px;'
+        f'min-width:220px;justify-content:center;'
+        f'box-shadow:0 2px 6px rgba(0,0,0,0.25);">'
+        f'<span style="font-size:16px;">{phase_icon}</span>'
+        f'<span class="spin-counter glow" style="font-size:14px;font-weight:900;color:#fff;">'
+        f'Total Spins: {total_spins}</span>'
+        f'<span style="background:rgba(255,255,255,0.25);color:#fff;font-size:10px;'
+        f'font-weight:900;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.5px;">'
+        f'{phase_label}</span>'
+        f'<span style="font-size:10px;color:rgba(255,255,255,0.8);font-style:italic;">{phase_tip}</span>'
+        f'</div>'
+        f'</div>'
+    )
+
+def sync_spins_display(spins_display):
+    """Passthrough to sync spins display state after hot/cold play."""
+    return spins_display
+
+def validate_hot_cold_numbers(numbers_input, type_label):
+    """Validate hot or cold numbers input (1 to 10 numbers, 0-36)."""
+    if not numbers_input or not numbers_input.strip():
+        return None, f"Please enter 1 to 10 {type_label} numbers."
+
+    try:
+        numbers = [int(n.strip()) for n in numbers_input.split(",") if n.strip()]
+        if len(numbers) < 1 or len(numbers) > 10:
+            return None, f"Enter 1 to 10 {type_label} numbers (entered {len(numbers)})."
+        if not all(0 <= n <= 36 for n in numbers):
+            return None, f"All {type_label} numbers must be between 0 and 36."
+        return numbers, None
+    except ValueError:
+        return None, f"Invalid {type_label} numbers. Use comma-separated integers (e.g., 1, 3, 5, 7, 9)."
 
 
-
-
+def clear_hot_cold_picks(type_label, current_spins_display):
+    """Clear hot or cold numbers input."""
+    state.casino_data[f"{type_label.lower()}_numbers"] = []
+    success_msg = f"Cleared {type_label} Picks successfully"
+    logger.debug(f"clear_hot_cold_picks: {success_msg}")
+    return "", success_msg, update_spin_counter(), render_sides_of_zero_display(), current_spins_display
 
 def _sync_auto_sliders():
     """Return gr.update() calls to sync DE2D sliders to AUTO overrides.
@@ -979,7 +2299,165 @@ def _sync_auto_sliders():
         return tuple(gr.update() for _ in range(10))
 
 
-from wheelpulsepro.styles import _EXTRA_CSS
+# ── Extra CSS for improved readability ──────────────────────────────────────
+_EXTRA_CSS = """
+/* Selected Spins Input - full width and more readable */
+#selected-spins,
+#selected-spins > .wrap,
+#selected-spins > label,
+#selected-spins-input,
+#selected-spins-input > .wrap,
+#selected-spins-input > label {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+#selected-spins textarea,
+#selected-spins input,
+#selected-spins-input textarea,
+#selected-spins-input input {
+    width: 100% !important;
+    max-width: 100% !important;
+    font-size: 16px !important;
+    padding: 12px !important;
+    min-height: 50px !important;
+    letter-spacing: 1px;
+    font-family: 'Courier New', monospace;
+}
+#selected-spins label span,
+#selected-spins-input label span {
+    font-size: 16px !important;
+    font-weight: 700 !important;
+}
+
+/* Accordion headers - more readable */
+.gradio-accordion > .label-wrap {
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    padding: 12px !important;
+}
+
+/* Status bar: keep spin counter centered */
+#status-bar-container {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 12px;
+    padding: 5px 15px !important;
+    margin: 10px 0 !important;
+    width: 100% !important;
+}
+
+#strategy-alert-overlay {
+    width: 100% !important;
+    border-left: 2px solid rgba(0,0,0,0.1);
+    margin-left: 10px;
+    border-radius: 8px;
+    padding: 2px 8px;
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+}
+
+/* Spin counter: centered and wider */
+.spin-counter-box {
+    display: flex !important;
+    justify-content: center !important;
+    min-width: 220px !important;
+    width: 100% !important;
+    white-space: nowrap !important;
+}
+
+/* Selected spins row: full width matching accordions */
+#selected-spins-row > div,
+#selected-spins-row .gradio-column {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+}
+
+/* Statistical Intelligence Layer — ensure all text is light on dark background */
+#stat-intel-accordion > .label-wrap,
+#stat-intel-accordion > .label-wrap span,
+#stat-intel-accordion > .label-wrap button {
+    color: #f1f5f9 !important;
+}
+#stat-intel-accordion b,
+#stat-intel-accordion strong,
+#stat-intel-accordion small,
+#stat-intel-accordion h3,
+#stat-intel-accordion h4,
+#stat-intel-accordion label,
+#stat-intel-accordion span {
+    color: #e2e8f0 !important;
+}
+/* Ensure accordion label itself is visible */
+.gradio-accordion#stat-intel-accordion > .label-wrap span,
+details#stat-intel-accordion > summary span,
+details#stat-intel-accordion > summary {
+    color: #f1f5f9 !important;
+}
+
+/* Pulsing glow animation for the "If I were you" strong-signal card */
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 8px #ef4444aa; border-color: #ef4444; }
+    50%       { box-shadow: 0 0 22px #ef4444, 0 0 35px #ef4444aa; border-color: #fca5a5; }
+}
+
+/* Final Brain display — always visible live decision engine */
+#final-brain-output {
+    margin: 8px 0 10px 0;
+}
+/* Ensure all bold/strong text in Final Brain renders white, not browser-default black */
+#final-brain-output b,
+#final-brain-output strong,
+#final-brain-output li {
+    color: #e2e8f0 !important;
+}
+@keyframes final-brain-glow {
+    0%, 100% { box-shadow: 0 0 10px rgba(99,102,241,0.4); border-color: #6366f1; }
+    50%       { box-shadow: 0 0 28px rgba(99,102,241,0.8), 0 0 50px rgba(99,102,241,0.3); border-color: #818cf8; }
+}
+
+/* Roulette table pulse/glow when strategy cards are active */
+@keyframes table-pulse-glow {
+    0%, 100% { box-shadow: 0 0 15px 4px rgba(255, 215, 0, 0.5), inset 0 0 15px 2px rgba(255, 215, 0, 0.1); border-color: #FFD700; }
+    50% { box-shadow: 0 0 30px 10px rgba(255, 165, 0, 0.8), inset 0 0 25px 5px rgba(255, 165, 0, 0.15); border-color: #FFA500; }
+}
+.roulette-table-pulse {
+    animation: table-pulse-glow 1.5s ease-in-out infinite !important;
+    border: 4px solid #FFD700 !important;
+    border-radius: 8px !important;
+}
+
+/* Siren indicator — flashing 🚨 emoji at top-right of roulette table */
+@keyframes siren-flash {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.3; transform: scale(1.3); }
+}
+.siren-indicator {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    font-size: 24px;
+    z-index: 10;
+    animation: siren-flash 0.8s ease-in-out infinite;
+}
+
+/* Alerts Sidebar — fixed right-side panel that follows the user as they scroll */
+#alerts-sidebar {
+    background: linear-gradient(145deg, #0f172a, #1e293b);
+    border: 2px solid #FFD700;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 6px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    box-shadow: 0 2px 12px rgba(255, 215, 0, 0.2);
+}
+"""
 
 with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_EXTRA_CSS) as demo:
     # Removed the Terms and Conditions Modal (gr.HTML block)
@@ -1059,7 +2537,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
 
     # Pre-define Labouchere view — rendered inside the Labouchere accordion below
     labouchere_view = gr.HTML(value=generate_labouchere_html(), render=False)
-    
+
     # Pre-define the checkboxes so they exist for the table button click event
     # Auto-Pilot default is unchecked (value=False)
     aidea_auto_checkbox = gr.Checkbox(label="🤖 Enable Auto-Pilot (Navigates based on Win/Loss)", value=False, interactive=True, render=False)
@@ -1530,10 +3008,6 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         "Sniper: Best Street + Corner": {"function": sniper_best_street_corner, "categories": ["streets", "corners"]}
     }
 
-    # Inject the STRATEGIES dict into the rendering module so apply_strategy_highlights
-    # can call the strategy functions via the module-level _strategies variable.
-    _rendering.set_callbacks(strategies_dict=STRATEGIES)
-
     # Line 1: Start of show_strategy_recommendations function (updated)
     def show_strategy_recommendations(strategy_name, neighbours_count, *args):
         """Generate strategy recommendations based on the selected strategy."""
@@ -1749,7 +3223,6 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         label="Enter Spins",
         value="",
         interactive=True,
-        lines=3,
         elem_id="selected-spins"
     )
     
@@ -1932,7 +3405,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
     with gr.Accordion("Dealer’s Spin Tracker (Can you spot Bias???) 🕵️", open=False, elem_id="sides-of-zero-accordion"):
         sides_of_zero_display = gr.HTML(
             label="Sides of Zero",
-            value="",  # populated on page load by _on_page_load
+            value=render_sides_of_zero_display(),
             elem_classes=["sides-of-zero-container"]
         )
 
@@ -2176,7 +3649,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
             with gr.Column(scale=1):
                 hit_percentage_display = gr.HTML(
                     label="Hit Percentages",
-                    value="",  # populated on page load by _on_page_load
+                    value=calculate_hit_percentages(36),
                     elem_classes=["hit-percentage-container"]
                 )
     with gr.Accordion("SpinTrend Radar 🌀", open=False, elem_id="spin-trend-radar"):
@@ -2391,7 +3864,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
             with gr.Column(scale=1):
                 traits_display = gr.HTML(
                     label="Spin Traits",
-                    value="",  # populated on page load by _on_page_load
+                    value=summarize_spin_traits(36),
                     elem_classes=["traits-container"]
                 )
                 
@@ -2624,7 +4097,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
 
         # Initial Logic Call (Added 5, 5 as default for Sides)
         de2d_output = gr.HTML(
-            value="",  # populated on page load by _on_page_load
+            value=de2d_tracker_logic(*[cfg[0] for cfg in _DE2D_SLIDER_CFG[:11]]),
             elem_classes=["de2d-output-box"],
             label="DE2D Alerts"
         )
@@ -2632,18 +4105,18 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         # --- Statistical Intelligence Layer ---
         with gr.Accordion("🧠 Statistical Intelligence Layer", open=False, elem_id="stat-intel-accordion"):
             smart_decision_output = gr.HTML(
-                value="",  # populated on page load by _on_page_load
+                value=render_smart_decision_summary_html(),
                 label="Smart Decision Summary"
             )
             with gr.Row():
                 with gr.Column(scale=1):
                     sigma_analysis_output = gr.HTML(
-                        value="",  # populated on page load by _on_page_load
+                        value=render_sigma_analysis_html(),
                         label="Sigma Analysis"
                     )
                 with gr.Column(scale=1):
                     drought_table_output = gr.HTML(
-                        value="",  # populated on page load by _on_page_load
+                        value=render_drought_table_html(),
                         label="Drought Counter"
                     )
 
@@ -2651,7 +4124,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
     # --- Final Brain: collapsible live decision engine (collapsed by default) ---
     with gr.Accordion("🧠 WheelPulse Pro Max's Recommendation", open=False, elem_id="brain-accordion"):
         final_brain_output = gr.HTML(
-            value="",  # populated on page load by _populate_deferred_outputs (.then() chain)
+            value=render_final_brain_html(),
             elem_id="final-brain-output"
         )
 
@@ -3085,14 +4558,14 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         # Cards render first (above Master Information) so opportunities are
         # immediately visible when the dashboard is opened.
         strategy_cards_area = gr.HTML(
-            value="",  # populated on page load by _on_page_load
+            value=render_strategy_cards_area_html(),
             elem_id="strategy-cards-area"
         )
         # AI Coach — live analysis panel, collapsed by default.
         # Positioned above the Master Information panel so coaching data is
         # easy to find when the dashboard is opened.
         ai_coach_output = gr.HTML(
-            value="",  # populated on page load by _on_page_load
+            value=_rendering.render_ai_coach_prompt_html(state),
             elem_id="ai-coach-prompt-panel-wrapper"
         )
         # Persistent sessionStorage script — survives Gradio HTML re-renders.
@@ -3142,13 +4615,13 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         # Compact always-visible summary strip showing current best bet at
         # a glance, so the user doesn't need to expand the inner section.
         master_info_summary_output = gr.HTML(
-            value="",  # populated on page load by _on_page_load
+            value=render_master_information_summary_html(),
             elem_id="master-info-summary"
         )
         # Full Master Information detail — collapsed by default.
         with gr.Accordion("🎯 MASTER INFORMATION — LAST MONEY BET", open=False, elem_id="master-info-accordion"):
             master_info_output = gr.HTML(
-                value="",  # populated on page load by _on_page_load
+                value=render_master_information_html(),
                 elem_id="master-info-output"
             )
 
@@ -3188,17 +4661,6 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         "Sniper Strategies": ["Sniper: Best Street + Corner"]
     }
     category_choices = ["None"] + sorted(strategy_categories.keys())
-
-    # Initialise ui_logic module with all app-level dependencies it needs.
-    _ui_logic.init(
-        state_obj=state,
-        update_scores_batch_fn=update_scores_batch,
-        update_drought_fn=_update_drought_counters,
-        format_spins_fn=format_spins_as_html,
-        render_sides_fn=render_sides_of_zero_display,
-        resolve_lab_targets_fn=_resolve_lab_targets,
-        strategy_categories_dict=strategy_categories,
-    )
 
     # Define video categories matching strategy categories
     video_categories = {
@@ -3341,7 +4803,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
             # NEW: Movement Radar HUD Component
             movement_radar_display = gr.HTML(
                 label="Movement Radar", 
-                value="",  # populated on page load by _on_page_load 
+                value=calculate_top_pick_movement([], []), 
                 elem_id="movement-radar-hud"
             )
             gr.Markdown("### Strategy Recommendations")
@@ -3394,7 +4856,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
                     )
                     strategy_output = gr.HTML(
                         label="Strategy Recommendations",
-                        value="",  # populated on page load by _on_page_load
+                        value=show_strategy_recommendations("Best Even Money Bets", 2, 1),
                         elem_classes=["strategy-box"]
                     )
         
@@ -3404,7 +4866,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
             gr.Markdown("### Dynamic Roulette Table", elem_id="dynamic-table-heading")
             dynamic_table_output = gr.HTML(
                 label="Dynamic Table",
-                value="",  # populated on page load by _on_page_load
+                value=create_dynamic_table(strategy_name="Best Even Money Bets"),
                 elem_classes=["scrollable-table", "large-table"]
             )
 
@@ -3444,7 +4906,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
                 # The visual roadmap
                 aidea_roadmap_view.render()
                 
-                # --- LABOUCHERE AUTO-PILOT ROADMAP ---
+                # --- NEW: UNIVERSAL LABOUCHERE ROADMAP ---
             with gr.Accordion("Dynamic Labouchere Auto-Pilot 🗺️", open=True, elem_id="labouchere-roadmap-container") as lab_accordion:
                 gr.Markdown("Auto-calculate and track the Labouchere sequence based on your active table targets.")
                 with gr.Row():
@@ -3455,7 +4917,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
                 with gr.Row():
                     lab_start_btn = gr.Button("▶️ Start Session", variant="primary", scale=1)
                     lab_reset_btn = gr.Button("⏹️ Reset", variant="stop", scale=1)
-
+                
                 labouchere_view.render()
 
             # --- NEW: PINNED STRONG NUMBERS WATCHLIST ---
@@ -3699,7 +5161,7 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
                     reset_weights_button = gr.Button("Reset Weights to Default", elem_id="reset-weights")
                 top_pick_display = gr.HTML(
                     label="Top Pick",
-                    value="",  # populated on page load by _on_page_load
+                    value=select_next_spin_top_pick(18, ["Red/Black", "Even/Odd", "Low/High", "Dozens", "Columns", "Wheel Sections", "Neighbors"]),
                     elem_classes=["top-pick-container"]
                 )
         gr.HTML("""
@@ -4638,6 +6100,16 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
                 padding: 8px !important;
                 max-height: 250px !important;
                 overflow-y: auto !important;
+            }
+    
+            /* Allow text selection inside accordion content and HTML output elements */
+            .aggregated-scores-row .gr-accordion > div,
+            .aggregated-scores-row .output-html,
+            .aggregated-scores-row .gr-textbox,
+            #aggregated-scores .output-html,
+            #aggregated-scores .prose {
+                user-select: text !important;
+                -webkit-user-select: text !important;
             }
     
             /* Animation for accordion opening */
@@ -6774,15 +8246,6 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
 
     # --- 3. EVENT LISTENERS ---
 
-    # Ordered list of the 10 slider components that _sync_auto_sliders() updates
-    # (matches the return-value order of _sync_auto_sliders: indices 0,1,2,4,5,6,7,8,9,10)
-    _auto_slider_sync_outputs = [
-        miss_slider, even_slider, streak_slider,
-        voisins_slider, tiers_slider,
-        left_side_slider, right_side_slider,
-        ds_strategy_slider, d17_strategy_slider, corner_strategy_slider,
-    ]
-
     # A. Spins Textbox (Live Input Validation & Update)
     try:
         spins_textbox.change(
@@ -7375,6 +8838,15 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
         tr_density_hits_slider, tr_active_lifetime_slider,
     ]
 
+    # Ordered list of the 10 slider components that _sync_auto_sliders() updates
+    # (matches the return-value order of _sync_auto_sliders: indices 0,1,2,4,5,6,7,8,9,10)
+    _auto_slider_sync_outputs = [
+        miss_slider, even_slider, streak_slider,
+        voisins_slider, tiers_slider,
+        left_side_slider, right_side_slider,
+        ds_strategy_slider, d17_strategy_slider, corner_strategy_slider,
+    ]
+
     btn_min_all.click(fn=set_all_sliders_min, inputs=[], outputs=de2d_sliders
     ).then(fn=de2d_tracker_logic, inputs=de2d_inputs_list, outputs=[de2d_output]
     ).then(fn=render_cards_and_alerts, inputs=de2d_inputs_list, outputs=[strategy_cards_area, alerts_bar_output])
@@ -7629,54 +9101,18 @@ with gr.Blocks(title="🎰 WheelPulse Pro Max — Roulette Spin Analyzer", css=_
     def _on_page_load(filters):
         _sync_strategy_flags_from_hud_filters(filters)
 
-    def _populate_deferred_outputs():
-        """Compute initial HTML values for components left empty at build time.
-
-        These are components whose initial values depend on the heavy modules
-        (rendering, trackers, analysis, strategies, sessions).  The modules are
-        already loaded by module-level init() calls above, so this function is
-        fast – it only runs the rendering logic, not the import machinery.
-        """
-        de2d_val = de2d_tracker_logic(*[cfg[0] for cfg in _DE2D_SLIDER_CFG[:11]])
-        smart_val = render_smart_decision_summary_html()
-        sigma_val = render_sigma_analysis_html()
-        drought_val = render_drought_table_html()
-        ai_coach_val = _rendering.render_ai_coach_prompt_html(state)
-        sides_val = render_sides_of_zero_display()
-        cards_val = render_strategy_cards_area_html()
-        master_summary_val = render_master_information_summary_html()
-        master_val = render_master_information_html()
-        hit_pct_val = calculate_hit_percentages(36)
-        traits_val = summarize_spin_traits(36)
-        movement_val = calculate_top_pick_movement([], [])
-        strategy_val = show_strategy_recommendations("Best Even Money Bets", 2, 1)
-        dynamic_table_val = create_dynamic_table(strategy_name="Best Even Money Bets")
-        top_pick_val = select_next_spin_top_pick(
-            18, ["Red/Black", "Even/Odd", "Low/High", "Dozens",
-                 "Columns", "Wheel Sections", "Neighbors"])
-        return (de2d_val, smart_val, sigma_val, drought_val, ai_coach_val,
-                sides_val, cards_val, master_summary_val, master_val,
-                hit_pct_val, traits_val, movement_val,
-                strategy_val, dynamic_table_val, top_pick_val)
-
     demo.load(
         fn=_on_page_load,
         inputs=[hud_visibility_filters],
         outputs=[]
-    ).then(
-        fn=_populate_deferred_outputs,
-        inputs=[],
-        outputs=[de2d_output, smart_decision_output, sigma_analysis_output,
-                 drought_table_output, ai_coach_output,
-                 sides_of_zero_display, strategy_cards_area,
-                 master_info_summary_output, master_info_output,
-                 hit_percentage_display, traits_display, movement_radar_display,
-                 strategy_output, dynamic_table_output, top_pick_display]
     ).then(
         fn=render_final_brain_html,
         inputs=[],
         outputs=[final_brain_output]
     )
 
-demo.queue()
-demo.launch(ssr_mode=False)
+# Launch the interface
+if __name__ == "__main__":
+    logger.info("Starting Gradio launch...")
+    demo.queue().launch()
+    logger.info("Gradio launch completed.")
