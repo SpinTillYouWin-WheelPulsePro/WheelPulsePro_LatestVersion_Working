@@ -2,23 +2,33 @@ name: Sync to Hugging Face Space
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
-  sync:
+  sync-to-huggingface:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Push to Hugging Face
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+
+      - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
+          pip install huggingface_hub
+          python - <<'PYEOF'
+          import os
+          from huggingface_hub import HfApi
 
-          git remote add hf https://user:${HF_TOKEN}@huggingface.co/spaces/Spintillyouwinwheelpulsepro/WheelPulsePro_LatestVersion_Working
-          git push --force hf HEAD:main
+          api = HfApi()
+          api.upload_folder(
+              folder_path=".",
+              repo_id="Spintillyouwinwheelpulsepro/WheelPulsePro-Super-Max-Slider-2026",
+              repo_type="space",
+              token=os.environ["HF_TOKEN"],
+              ignore_patterns=["*.git*", ".github*", "__pycache__*"]
+          )
+          print("Upload complete!")
+          PYEOF
