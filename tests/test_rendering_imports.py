@@ -645,7 +645,7 @@ def _make_render_alerts_bar_fn(mock_cards: dict):
     """Return a callable version of render_alerts_bar_html with mocked globals."""
     import pathlib, ast, types, logging
 
-    src = pathlib.Path("wheelpulsepro/rendering.py").read_text()
+    src = pathlib.Path("app.py").read_text()
     tree = ast.parse(src)
 
     # Extract the function definition node
@@ -656,7 +656,7 @@ def _make_render_alerts_bar_fn(mock_cards: dict):
 
     # Compile just the function body into a module so exec gives us the fn
     mod = ast.Module(body=[fn_node], type_ignores=[])
-    code = compile(mod, "<rendering_extract>", "exec")
+    code = compile(mod, "<app_extract>", "exec")
 
     ns: dict = {
         "_prev_active_cards": mock_cards,
